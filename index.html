@@ -55,14 +55,18 @@
         <h2 id="t-name"></h2>
         <p class="big" id="t-elapsed">0:00</p>
         <p class="muted" id="t-meta"></p>
+        <p class="cue" id="t-cue"></p>
+        <div class="laps" id="t-laps"></div>
+        <label class="flag"><input type="checkbox" id="t-flag"> Ride went down while I was in line (keep timing; this run is flagged)</label>
         <div class="row">
           <button class="btn primary" id="t-stop" type="button">I'm boarding</button>
           <button class="btn" id="t-cancel" type="button">Cancel</button>
         </div>
+        <p class="muted small">Used Lightning Lane, single rider, or rider swap? Tap Cancel; those runs don't count.</p>
       </div>
       <div class="list-head">
         <h2>My waits</h2>
-        <p class="muted" id="log-empty">No timed waits yet. Open a ride on the map and tap “Start wait timer” when you join the line.</p>
+        <p class="muted" id="log-empty">No timed waits yet. Open a ride on the map and tap “Start wait timer” when you join the back of the standby line. See “Stopwatch rules” below.</p>
       </div>
       <div class="verdict" id="verdict" hidden></div>
       <div class="table-wrap" id="log-wrap" hidden>
@@ -84,6 +88,19 @@
         <p>Every two minutes the app reads Disneyland's posted waits through ThemeParks.wiki and notes when each ride's posted number last changed.</p>
         <p>While the app has been open for a while, “unchanged” is measured directly. Right after you open it, the app falls back to the feed's own update time, which moves whenever anything about the ride changes, so those figures are a minimum and show as “at least”.</p>
         <p>A stale posted wait is a hunch, not a promise. Timing your own waits here builds the evidence either way.</p>
+      </details>
+      <details class="about" id="protocol">
+        <summary>Stopwatch rules (timing protocol)</summary>
+        <p>These follow Disney's retired red-card method, which handed out cards at the queue entrance and collected them at boarding, so every run is timed the same way.</p>
+        <ol class="rules">
+          <li><strong>Start</strong> the moment you take your place at the back of the standby line. If the line is inside the entrance, that is the standby entrance by the posted wait sign. If it spills outside, it is the back of that extended line.</li>
+          <li><strong>Lap at the sign:</strong> if you started outside the entrance, tap “Passed the posted wait sign” as you pass it. That gives both the true wait and the red-card-style wait.</li>
+          <li><strong>Stop</strong> the moment you step into the ride vehicle, boat, or cabin. Not when you reach the load area, and not when the ride starts moving.</li>
+          <li><strong>Preshows count.</strong> Keep the clock running and tap the preshow lap buttons (Haunted Mansion, Rise of the Resistance, Smugglers Run, Runaway Railway) so preshow time can be separated later.</li>
+          <li><strong>Logged automatically at start:</strong> the posted wait, the time of day, and how long that posted wait had gone unchanged.</li>
+          <li><strong>Don't use the run</strong> if you used Lightning Lane, single rider, or rider swap. If the ride breaks down while you're in line, keep timing and tick the “ride went down” box.</li>
+        </ol>
+        <p>Not timed: showtime attractions (Enchanted Tiki Room, Great Moments with Mr. Lincoln, Mickey's PhilharMagic) and walk-throughs with no line. Riverboat and Columbia waits follow departure times, so expect jumpy numbers. Each ride's own stop point shows when you tap it on the map.</p>
         <p class="muted">Wait data from <a href="https://themeparks.wiki">ThemeParks.wiki</a>. Map data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>. Not affiliated with Disney.</p>
       </details>
     </section>
@@ -99,6 +116,7 @@
     </div>
     <p id="s-note" class="note"></p>
     <p id="s-extra" class="muted"></p>
+    <div class="howto" id="s-howto"></div>
     <button class="btn primary wide" id="s-timer" type="button">Start wait timer</button>
   </section>
 

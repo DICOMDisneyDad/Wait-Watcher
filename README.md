@@ -22,7 +22,15 @@ Any static host works (Netlify, Cloudflare Pages). It must be served over https 
 
 ## My waits
 
-Tap a ride, then **Start wait timer** when you join the line and **I'm boarding** when you reach the front. Each timed wait stores the posted wait, how stale it was, and your actual wait.
+Tap a ride to see its timing rules: start at the back of the standby line, stop when you step into the ride vehicle (each ride's exact stop point is shown). Tap **Start wait timer** when you join the line.
+
+While timing, lap buttons record splits:
+- **Passed the posted wait sign** on every ride, for when the line spills outside the entrance.
+- Preshow laps on Haunted Mansion (stretching room), Rise of the Resistance (briefing room, shuttle), Smugglers Run (Hondo room) and Runaway Railway (preshow room).
+
+Tap a recorded lap to undo it. Tick **Ride went down** to flag a run; flagged runs stay in the log but are left out of the summary. Showtime attractions and walk-throughs have no timer. The full rules are under **My waits → Stopwatch rules**.
+
+Each timed wait stores the posted wait, how stale it was, your actual wait, and any laps.
 The summary compares your actual-to-posted ratio for stale versus fresh postings. **Export CSV** downloads the log. Everything stays on your phone (browser storage).
 
 ## Files
@@ -33,6 +41,7 @@ The summary compares your actual-to-posted ratio for stale versus fresh postings
 
 ## Editing
 
+- Stop points and lap points live in `PROTOCOL` in `app.js`, matched by ride name. Untimed attractions are in `NOT_TIMED`.
 - Ride positions live in the `RIDES` list at the top of `app.js` as `[ThemeParks.wiki id, x, y, land]`. Coordinates match `map.svg`.
 - Rides the feed reports that aren't in that list still appear in the List view.
 - The flag thresholds can be changed in the app under **List → Flag settings**.

@@ -62,6 +62,65 @@ const SKIP = new Set(['6e2af074-3a67-4f38-9bcf-2f5a572c87df']); // duplicate Ope
 const LANDS = [["Main Street, U.S.A.",952,1120],["Fantasyland",985,520],["Toontown",1000,225],["Tomorrowland",1215,855],["Frontierland",700,790],["Adventureland",780,1060],["New Orleans Square",560,985],["Bayou Country",385,800],["Galaxy's Edge",520,420]];
 const POS = Object.fromEntries(RIDES.map(r => [r[0], {x:r[1], y:r[2], land:r[3]}]));
 
+/* Timing protocol (from the Disneyland Wait Timing Protocol doc). Matched by ride name.
+   [name fragment, stop point, preshow lap points] */
+const PROTOCOL = [
+  ['indiana jones', 'step into the troop transport'],
+  ['jungle cruise', 'step into the boat'],
+  ['pirates of the caribbean', 'step into the boat'],
+  ['haunted mansion', 'step into the Doom Buggy', ['Entering the stretching room']],
+  ['tianas bayou', 'step into the log'],
+  ['winnie the pooh', 'step into the beehive'],
+  ['explorer canoes', 'step into the canoe'],
+  ['big thunder', 'step into the train car'],
+  ['railroad', 'step onto the train car'],
+  ['mark twain', 'step onto the deck'],
+  ['columbia', 'step onto the deck'],
+  ['tom sawyer', 'step onto the raft'],
+  ['pirates lair', 'step onto the raft'],
+  ['rise of the resistance', 'step into the Fleet Transport vehicle', ['Entering the briefing room', 'Boarding the shuttle']],
+  ['smugglers run', 'step into the cockpit', ['Entering the Hondo room']],
+  ['matterhorn', 'step into the bobsled'],
+  ['peter pan', 'step into the ship'],
+  ['snow white', 'step into the mine car'],
+  ['pinocchio', 'step into the car'],
+  ['mr toad', 'step into the car'],
+  ['alice in wonderland', 'step into the caterpillar'],
+  ['mad tea party', 'step into the teacup'],
+  ['king arthur', 'step onto the horse'],
+  ['dumbo', 'step into the Dumbo'],
+  ['casey jr', 'step into the car'],
+  ['storybook land', 'step into the boat'],
+  ['small world', 'step into the boat'],
+  ['runaway railway', 'step into the train', ['Entering the preshow room']],
+  ['car toon spin', 'step into the cab'],
+  ['gadgetcoaster', 'step into the coaster'],
+  ['space mountain', 'step into the rocket'],
+  ['star tours', 'step through the Starspeeder doors'],
+  ['astro blasters', 'step into the cruiser'],
+  ['submarine voyage', 'step through the submarine hatch'],
+  ['autopia', 'step into the car'],
+  ['astro orbitor', 'step into the rocket'],
+  ['monorail', 'step into the monorail']
+];
+const NOT_TIMED = [
+  ['tiki room', 'Runs on a showtime, so its wait depends on the next show, not a moving line.'],
+  ['mr lincoln', 'Runs on a showtime, so its wait depends on the next show, not a moving line.'],
+  ['philharmagic', 'Runs on a showtime, so its wait depends on the next show, not a moving line.'],
+  ['treehouse', 'Walk-through with no line.'],
+  ['castle walkthrough', 'Walk-through with no line.']
+];
+const SIGN_LAP = 'Passed the posted wait sign';
+const norm = s => s.toLowerCase().replace(/[’'`]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+function protocolFor(name){
+  const n = norm(name);
+  const skip = NOT_TIMED.find(p => n.includes(p[0]));
+  if (skip) return {untimed:true, why:skip[1]};
+  const p = PROTOCOL.find(p => n.includes(p[0]));
+  return p ? {stop:p[1], laps:p[2] || []} : {stop:'step into the ride vehicle', laps:[], generic:true};
+}
+const fmtClock = ms => { const s = Math.max(0, Math.floor(ms / 1000)); return Math.floor(s/60) + ':' + String(s%60).padStart(2,'0'); };
+
 /* storage */
 const store = {
   get(k, d){ try{ const v = localStorage.getItem('ww-' + k); return v ? JSON.parse(v) : d; }catch(e){ return d; } },
@@ -231,8 +290,17 @@ function openSheet(id, pan){
   if (r.single !== null) extra.push('Single rider: ' + r.single + ' min');
   if (r.ll && r.ll.state) extra.push('Lightning Lane: ' + (r.ll.state === 'AVAILABLE' && r.ll.returnStart ? 'returns from ' + new Date(r.ll.returnStart).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'}) : r.ll.state === 'FINISHED' ? 'sold out' : r.ll.state.toLowerCase().replace('_',' ')));
   $('s-extra').textContent = extra.join(' · ');
+  const pr = protocolFor(r.name), how = $('s-howto'); how.textContent = '';
+  if (pr.untimed){
+    how.append(howLine('Not timed', pr.why));
+  } else {
+    how.append(howLine('Start', 'when you take your place at the back of the standby line (the entrance by the wait sign, or the back of the line if it spills outside).'));
+    how.append(howLine('Lap', 'at the posted wait sign if you started outside the entrance.'));
+    if (pr.laps.length) how.append(howLine('Preshow laps', pr.laps.join('; ') + '. Keep the clock running through the preshow.'));
+    how.append(howLine('Stop', 'when you ' + pr.stop + '. Not at the load area, and not when the ride starts moving.'));
+  }
   const tb = $('s-timer');
-  tb.hidden = !(r.status === 'OPERATING');
+  tb.hidden = !(r.status === 'OPERATING') || !!pr.untimed;
   tb.disabled = !!timer; tb.textContent = timer ? 'A wait timer is already running' : 'Start wait timer';
   $('sheet').hidden = false; $('hunch-bar').hidden = true;
   if (pan && r.pos && map) map.flyTo([-r.pos.y + 90, r.pos.x], Math.max(map.getZoom(), 0.5), {duration: matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 0.6});
@@ -243,13 +311,58 @@ function closeSheet(){ if ($('sheet').hidden) return; $('sheet').hidden = true; 
 /* timer and log */
 function startTimer(){
   const r = rides.find(x => x.id === selectedId); if (!r || timer) return;
-  timer = {id:r.id, name:r.name, posted:r.wait, staleMin:Math.round(r.staleMin), exact:r.exact, start:Date.now()};
+  timer = {id:r.id, name:r.name, posted:r.wait, staleMin:Math.round(r.staleMin), exact:r.exact, start:Date.now(), laps:[], flagged:false};
   store.set('timer', timer); closeSheet(); show('log'); render();
 }
 function stopTimer(keep){
   if (!timer) return;
-  if (keep){ log.unshift(Object.assign({}, timer, {end:Date.now(), actualMin:Math.round((Date.now() - timer.start) / 60000)})); store.set('log', log); }
+  if (keep){
+    const end = Date.now(), sec = Math.round((end - timer.start) / 1000);
+    log.unshift(Object.assign({}, timer, {end, actualSec:sec, actualMin:Math.round(sec / 60)}));
+    store.set('log', log);
+  }
   timer = null; store.set('timer', null); render();
+}
+function lap(label){
+  if (!timer) return;
+  timer.laps = (timer.laps || []).filter(l => l.label !== label);
+  timer.laps.push({label, at:Date.now() - timer.start});
+  timer.laps.sort((a,b) => a.at - b.at);
+  store.set('timer', timer); renderTimer(true);
+}
+function unlap(label){
+  if (!timer) return;
+  timer.laps = (timer.laps || []).filter(l => l.label !== label);
+  store.set('timer', timer); renderTimer(true);
+}
+function howLine(k, text){
+  const p = document.createElement('p'); const b = document.createElement('strong'); b.textContent = k + ': ';
+  p.append(b, text); return p;
+}
+function renderTimer(rebuild){
+  if (!timer) return;
+  const pr = protocolFor(timer.name);
+  $('t-elapsed').textContent = fmtClock(Date.now() - timer.start);
+  if (!rebuild && $('t-laps').dataset.for === String(timer.start)) return;
+  $('t-laps').dataset.for = String(timer.start);
+  $('t-cue').textContent = 'Stop when you ' + pr.stop + '.';
+  $('t-stop').textContent = 'I ' + pr.stop.replace(/^step/, 'stepped');
+  const box = $('t-laps'); box.textContent = '';
+  const labels = [SIGN_LAP].concat(pr.laps);
+  for (const label of labels){
+    const done = (timer.laps || []).find(l => l.label === label);
+    const b = document.createElement('button'); b.type = 'button';
+    b.className = 'btn lap' + (label === SIGN_LAP ? ' sign' : '') + (done ? ' done' : '');
+    b.textContent = done ? '✓ ' + label + ' · ' + fmtClock(done.at) : 'Lap: ' + label;
+    if (label === SIGN_LAP && !done){ const s = document.createElement('small'); s.textContent = 'Only if you started outside the entrance'; b.append(s); }
+    b.setAttribute('aria-label', done ? label + ' recorded at ' + fmtClock(done.at) + '. Tap to undo.' : 'Record lap: ' + label);
+    b.addEventListener('click', () => done ? unlap(label) : lap(label));
+    box.append(b);
+  }
+  $('t-flag').checked = !!timer.flagged;
+}
+function lapSummary(e){
+  return (e.laps || []).map(l => (l.label === SIGN_LAP ? 'Sign' : l.label.replace(/^(Entering|Boarding) the /, '')) + ' ' + fmtClock(l.at)).join(' · ');
 }
 function median(a){ if (!a.length) return null; const s = a.slice().sort((x,y) => x-y), m = Math.floor(s.length/2); return s.length % 2 ? s[m] : (s[m-1] + s[m]) / 2; }
 function renderLog(){
@@ -257,8 +370,7 @@ function renderLog(){
   const card = $('timer-card'); card.hidden = !timer;
   if (timer){
     $('t-name').textContent = timer.name;
-    const s = Math.floor((Date.now() - timer.start) / 1000);
-    $('t-elapsed').textContent = Math.floor(s/60) + ':' + String(s%60).padStart(2,'0');
+    renderTimer(false);
     $('t-meta').textContent = timer.posted !== null ? 'Posted ' + timer.posted + ' min, unchanged for ' + (timer.exact ? '' : 'at least ') + fmtMin(timer.staleMin) + ' when you joined.' : 'No posted wait when you joined.';
   }
   const has = log.length > 0;
@@ -267,12 +379,14 @@ function renderLog(){
   for (const e of log){
     const tr = document.createElement('tr');
     const td = (t, cls, sub) => { const c = document.createElement('td'); if (cls) c.className = cls; c.textContent = t; if (sub){ const s = document.createElement('small'); s.textContent = sub; c.append(s); } tr.append(c); };
-    td(e.name, '', new Date(e.start).toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'}));
+    const when = new Date(e.start).toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'});
+    const laps = lapSummary(e);
+    td(e.name, '', [when, laps, e.flagged ? '⚑ Ride went down (left out of summary)' : ''].filter(Boolean).join(' · '));
     td(e.posted === null ? '–' : e.posted + ' min', 'num'); td((e.exact ? '' : '≥ ') + e.staleMin + ' min', 'num'); td(e.actualMin + ' min', 'num');
     tb.append(tr);
   }
   const v = $('verdict');
-  const withPost = log.filter(e => e.posted > 0);
+  const withPost = log.filter(e => e.posted > 0 && !e.flagged);
   const st = withPost.filter(e => e.staleMin >= settings.stale), fr = withPost.filter(e => e.staleMin < settings.stale);
   if (withPost.length){
     const pct = g => { const m = median(g.map(e => e.actualMin / e.posted)); return m === null ? null : Math.round(m * 100); };
@@ -286,8 +400,14 @@ function renderLog(){
   } else v.hidden = true;
 }
 function exportCsv(){
-  const rows = [['date','ride','posted_min','unchanged_min','unchanged_exact','actual_min']];
-  for (const e of log) rows.push([new Date(e.start).toISOString(), e.name, e.posted ?? '', e.staleMin, e.exact ? 'yes' : 'no', e.actualMin]);
+  const rows = [['date','ride','posted_min','unchanged_min','unchanged_exact','actual_min','actual_sec','sign_lap_sec','sign_to_board_sec','preshow_laps','ride_went_down']];
+  for (const e of log){
+    const sign = (e.laps || []).find(l => l.label === SIGN_LAP);
+    const sec = e.actualSec ?? e.actualMin * 60;
+    const pre = (e.laps || []).filter(l => l.label !== SIGN_LAP).map(l => l.label + ' @' + Math.round(l.at / 1000) + 's').join('; ');
+    rows.push([new Date(e.start).toISOString(), e.name, e.posted ?? '', e.staleMin, e.exact ? 'yes' : 'no', e.actualMin, sec,
+      sign ? Math.round(sign.at / 1000) : '', sign ? sec - Math.round(sign.at / 1000) : '', pre, e.flagged ? 'yes' : 'no']);
+  }
   const csv = rows.map(r => r.map(c => /[",\n]/.test(String(c)) ? '"' + String(c).replace(/"/g,'""') + '"' : c).join(',')).join('\n');
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], {type:'text/csv'})); a.download = 'wait-watcher-log.csv'; document.body.append(a); a.click(); a.remove();
 }
@@ -314,6 +434,7 @@ function init(){
   $('s-timer').addEventListener('click', startTimer);
   $('t-stop').addEventListener('click', () => stopTimer(true));
   $('t-cancel').addEventListener('click', () => stopTimer(false));
+  $('t-flag').addEventListener('change', e => { if (timer){ timer.flagged = e.target.checked; store.set('timer', timer); } });
   $('btn-export').addEventListener('click', exportCsv);
   $('btn-clear').addEventListener('click', () => { $('clear-confirm').hidden = false; });
   $('clear-no').addEventListener('click', () => { $('clear-confirm').hidden = true; });
