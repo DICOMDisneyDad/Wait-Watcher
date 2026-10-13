@@ -114,3 +114,6 @@ table.log{width:100%;border-collapse:collapse;font-size:14px}
 .flag input{width:20px;height:20px;flex:none;margin:0}
 .timer-card .small{font-size:12.5px;margin-top:10px}
 .rules{padding-left:20px;line-height:1.45}.rules li{margin-bottom:6px}
+.sync input{display:block;width:100%;margin:6px 0 0;font:inherit;font-size:14px;padding:10px;border-radius:8px;border:1.5px solid var(--line);background:var(--bg);color:var(--fg)}
+.sync .muted{margin-top:8px}
+.small{font-size:12.5px}

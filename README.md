@@ -31,12 +31,13 @@ While timing, lap buttons record splits:
 Tap a recorded lap to undo it. Tick **Ride went down** to flag a run; flagged runs stay in the log but are left out of the summary. Showtime attractions and walk-throughs have no timer. The full rules are under **My waits → Stopwatch rules**.
 
 Each timed wait stores the posted wait, how stale it was, your actual wait, and any laps.
-The summary compares your actual-to-posted ratio for stale versus fresh postings. **Export CSV** downloads the log. Everything stays on your phone (browser storage).
+The summary compares your actual-to-posted ratio for stale versus fresh postings. **Export CSV** downloads the log. The log is kept on your phone (browser storage). To also send each wait to a Google Sheet, follow `google-sheet/README.md`, then paste the web app URL under **My waits → Google Sheet sync**.
 
 ## Files
 
 - `index.html`, `app.css`, `app.js`: the app
 - `map.svg`: the park map, drawn from OpenStreetMap data
+- `google-sheet/`: the Apps Script for Google Sheet sync and its setup steps
 - `sw.js`, `manifest.webmanifest`, `icon-*.png`: home-screen install and offline shell
 
 ## Editing

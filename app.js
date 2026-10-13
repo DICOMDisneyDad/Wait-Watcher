@@ -322,6 +322,7 @@ function stopTimer(keep){
     store.set('log', log);
   }
   timer = null; store.set('timer', null); render();
+  if (keep) syncLog();
 }
 function lap(label){
   if (!timer) return;
@@ -381,7 +382,7 @@ function renderLog(){
     const td = (t, cls, sub) => { const c = document.createElement('td'); if (cls) c.className = cls; c.textContent = t; if (sub){ const s = document.createElement('small'); s.textContent = sub; c.append(s); } tr.append(c); };
     const when = new Date(e.start).toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'});
     const laps = lapSummary(e);
-    td(e.name, '', [when, laps, e.flagged ? '⚑ Ride went down (left out of summary)' : ''].filter(Boolean).join(' · '));
+    td(e.name, '', [when, laps, e.flagged ? '⚑ Ride went down (left out of summary)' : '', syncUrl() && !e.synced ? 'Not in sheet yet' : ''].filter(Boolean).join(' · '));
     td(e.posted === null ? '–' : e.posted + ' min', 'num'); td((e.exact ? '' : '≥ ') + e.staleMin + ' min', 'num'); td(e.actualMin + ' min', 'num');
     tb.append(tr);
   }
@@ -399,15 +400,58 @@ function renderLog(){
     if (st.length + fr.length < 10){ v.append(document.createElement('br')); const s = document.createElement('span'); s.className = 'muted'; s.textContent = 'A handful of rides can mislead; aim for 10 or more in each group.'; v.append(s); }
   } else v.hidden = true;
 }
+const COLS = ['date','ride','posted_min','unchanged_min','unchanged_exact','actual_min','actual_sec','sign_lap_sec','sign_to_board_sec','preshow_laps','ride_went_down'];
+function rowFor(e){
+  const sign = (e.laps || []).find(l => l.label === SIGN_LAP);
+  const sec = e.actualSec ?? e.actualMin * 60;
+  const pre = (e.laps || []).filter(l => l.label !== SIGN_LAP).map(l => l.label + ' @' + Math.round(l.at / 1000) + 's').join('; ');
+  return {id:String(e.start), date:new Date(e.start).toISOString(), ride:e.name, posted_min:e.posted ?? '', unchanged_min:e.staleMin,
+    unchanged_exact:e.exact ? 'yes' : 'no', actual_min:e.actualMin, actual_sec:sec, sign_lap_sec:sign ? Math.round(sign.at / 1000) : '',
+    sign_to_board_sec:sign ? sec - Math.round(sign.at / 1000) : '', preshow_laps:pre, ride_went_down:e.flagged ? 'yes' : 'no'};
+}
+
+/* Google Sheet sync: each finished wait is sent once; the sheet skips ids it already has, so retries are safe. */
+let syncing = false, syncMsg = '';
+function syncUrl(){ return (settings.syncUrl || '').trim(); }
+async function syncLog(){
+  const url = syncUrl(), todo = log.filter(e => !e.synced);
+  if (!url || syncing){ renderSync(); return; }
+  if (!todo.length){ syncMsg = 'All ' + log.length + ' timed wait' + (log.length === 1 ? '' : 's') + ' are in your sheet.'; renderSync(); return; }
+  if (navigator.onLine === false){ syncMsg = todo.length + ' waiting to sync. Will send when you have signal.'; renderSync(); return; }
+  syncing = true; syncMsg = 'Sending ' + todo.length + '…'; renderSync();
+  try{
+    const r = await fetch(url, {method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body:JSON.stringify({rows:todo.map(rowFor)})});
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || 'sheet error');
+    const ok = new Set(j.ids);
+    for (const e of log) if (ok.has(String(e.start))) e.synced = true;
+    store.set('log', log);
+    const left = log.filter(e => !e.synced).length;
+    syncMsg = left ? left + ' still waiting to sync.' : 'All ' + log.length + ' timed wait' + (log.length === 1 ? '' : 's') + ' are in your sheet.';
+  }catch(err){
+    syncMsg = 'Couldn’t reach the sheet. ' + todo.length + ' waiting; it will retry automatically.';
+  }finally{ syncing = false; renderSync(); }
+}
+async function testSync(){
+  const url = syncUrl(); if (!url) return;
+  syncMsg = 'Checking the link…'; renderSync();
+  try{
+    const r = await fetch(url, {cache:'no-store'}); const j = await r.json();
+    if (j.app !== 'wait-watcher') throw new Error('wrong script');
+    syncMsg = 'Connected. The sheet has ' + j.rows + ' row' + (j.rows === 1 ? '' : 's') + '.'; renderSync(); syncLog();
+  }catch(err){ syncMsg = 'That link didn’t answer like the Wait Watcher script. Check the web app URL and that access is set to Anyone.'; renderSync(); }
+}
+function renderSync(){
+  const s = $('sync-status'); if (!s) return;
+  if (!timer) renderLog();
+  const left = log.filter(e => !e.synced).length;
+  s.textContent = !syncUrl() ? 'Not connected. Timed waits stay on this phone only.' : syncMsg || (left ? left + ' waiting to sync.' : 'Connected.');
+  $('sync-now').hidden = !syncUrl();
+}
+
 function exportCsv(){
-  const rows = [['date','ride','posted_min','unchanged_min','unchanged_exact','actual_min','actual_sec','sign_lap_sec','sign_to_board_sec','preshow_laps','ride_went_down']];
-  for (const e of log){
-    const sign = (e.laps || []).find(l => l.label === SIGN_LAP);
-    const sec = e.actualSec ?? e.actualMin * 60;
-    const pre = (e.laps || []).filter(l => l.label !== SIGN_LAP).map(l => l.label + ' @' + Math.round(l.at / 1000) + 's').join('; ');
-    rows.push([new Date(e.start).toISOString(), e.name, e.posted ?? '', e.staleMin, e.exact ? 'yes' : 'no', e.actualMin, sec,
-      sign ? Math.round(sign.at / 1000) : '', sign ? sec - Math.round(sign.at / 1000) : '', pre, e.flagged ? 'yes' : 'no']);
-  }
+  const rows = [COLS];
+  for (const e of log){ const r = rowFor(e); rows.push(COLS.map(c => r[c])); }
   const csv = rows.map(r => r.map(c => /[",\n]/.test(String(c)) ? '"' + String(c).replace(/"/g,'""') + '"' : c).join(',')).join('\n');
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], {type:'text/csv'})); a.download = 'wait-watcher-log.csv'; document.body.append(a); a.click(); a.remove();
 }
@@ -438,13 +482,22 @@ function init(){
   $('btn-export').addEventListener('click', exportCsv);
   $('btn-clear').addEventListener('click', () => { $('clear-confirm').hidden = false; });
   $('clear-no').addEventListener('click', () => { $('clear-confirm').hidden = true; });
-  $('clear-yes').addEventListener('click', () => { log = []; store.set('log', log); $('clear-confirm').hidden = true; render(); });
+  $('clear-yes').addEventListener('click', () => { log = []; store.set('log', log); $('clear-confirm').hidden = true; syncMsg = ''; render(); renderSync(); });
   const ss = $('set-stale'), sm = $('set-minwait'); ss.value = settings.stale; sm.value = settings.minWait;
   const saveSet = () => { const a = parseInt(ss.value, 10), b = parseInt(sm.value, 10); if (a >= 5) settings.stale = a; if (b >= 0) settings.minWait = b; store.set('settings', settings); render(); };
   ss.addEventListener('change', saveSet); sm.addEventListener('change', saveSet);
   document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet(); });
   document.addEventListener('visibilitychange', () => { if (!document.hidden && Date.now() - lastFetch > 60000) refresh(); });
-  setInterval(() => { if (!document.hidden) refresh(); }, POLL_MS);
+  setInterval(() => { if (!document.hidden){ refresh(); if (log.some(e => !e.synced)) syncLog(); } }, POLL_MS);
+  const su = $('sync-url'); su.value = settings.syncUrl || '';
+  $('sync-save').addEventListener('click', () => {
+    const v = su.value.trim();
+    if (v && !/^https:\/\/script\.google(usercontent)?\.com\//.test(v)){ syncMsg = 'Paste the web app URL from Apps Script (it starts with https://script.google.com/).'; renderSync(); return; }
+    settings.syncUrl = v; store.set('settings', settings); syncMsg = ''; v ? testSync() : renderSync();
+  });
+  $('sync-now').addEventListener('click', syncLog);
+  window.addEventListener('online', syncLog);
+  renderSync(); syncLog();
   setInterval(() => { if (timer) renderLog(); }, 1000);
   setInterval(render, 30000);
   refresh();

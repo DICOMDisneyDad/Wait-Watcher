@@ -80,9 +80,20 @@
         <button class="btn danger" id="btn-clear" type="button">Clear log</button>
       </div>
       <div class="confirm" id="clear-confirm" hidden>
-        <p>Delete every timed wait on this phone?</p>
+        <p>Delete every timed wait on this phone? Rows already in your Google Sheet stay there.</p>
         <div class="row"><button class="btn danger" id="clear-yes" type="button">Delete all</button><button class="btn" id="clear-no" type="button">Keep</button></div>
       </div>
+      <details class="settings sync" id="sync-box">
+        <summary>Google Sheet sync</summary>
+        <p class="muted" id="sync-status">Not connected. Timed waits stay on this phone only.</p>
+        <label class="muted" for="sync-url">Apps Script web app URL</label>
+        <input id="sync-url" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://script.google.com/macros/s/…/exec">
+        <div class="row">
+          <button class="btn primary" id="sync-save" type="button">Save and test</button>
+          <button class="btn" id="sync-now" type="button" hidden>Sync now</button>
+        </div>
+        <p class="muted small">Each wait is sent when you stop the timer. With no signal it waits and retries, so nothing is lost. Setup steps are in the repo's google-sheet folder.</p>
+      </details>
       <details class="about">
         <summary>How the staleness clock works</summary>
         <p>Every two minutes the app reads Disneyland's posted waits through ThemeParks.wiki and notes when each ride's posted number last changed.</p>
