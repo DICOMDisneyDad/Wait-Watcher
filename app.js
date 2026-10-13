@@ -1,0 +1,332 @@
+'use strict';
+/* Wait Watcher: Disneyland posted waits on a map, plus how long each posted number has gone unchanged. */
+const PARK_ID = '7340550b-c14d-4def-80bb-acdb51d49a66';
+const API = 'https://api.themeparks.wiki/v1/entity/' + PARK_ID + '/live';
+const POLL_MS = 2 * 60 * 1000;
+const GAP_MS = 12 * 60 * 1000; // a longer gap between readings means we may have missed a change
+
+// ThemeParks.wiki id, map x, map y, land. Map coordinates match map.svg (viewBox 170 90 1300 1230).
+const RIDES = [
+  ['0de1413a-73ee-46cf-af2e-c491cc7c7d3b',750,754,'Frontierland'],
+  ['6c30d5b0-8c0a-406f-9258-0b6c55d4a5e4',716,829,'Frontierland'],
+  ['c9e39189-7e99-4e0a-97e0-4a0d5654d257',700,850,'Frontierland'],
+  ['07952343-3498-404b-8337-734de9a185c1',565,751,'Frontierland'],
+  ['835deb74-de54-4d7f-9dc4-dacab90fcb60',833,818,'Frontierland'],
+  ['1b83fda8-d60e-48e4-9a3d-90ddcbcd1001',792,977,'Adventureland'],
+  ['2aedc657-1ee2-4545-a1ce-14753f28cc66',657,1142,'Adventureland'],
+  ['106c1e5a-a5e7-42d7-96ab-bc100d8faf71',861,930,'Adventureland'],
+  ['e27b1db8-9ec9-4f8b-9ca6-fd6377de66ee',716,998,'Adventureland'],
+  ['82aeb29b-504a-416f-b13f-f41fa5b766aa',629,1051,'New Orleans Square'],
+  ['ff52cb64-c1d5-4feb-9d43-5dbd429bac81',479,937,'New Orleans Square'],
+  ['a9076acd-7630-4bad-a8da-e6bd689ddcac',403,864,'Bayou Country'],
+  ['52a8ef64-d54c-4974-883f-027c3026e3f1',331,750,'Bayou Country'],
+  ['5bd95ae8-181d-449c-8f04-a621e2448961',493,780,'Bayou Country'],
+  ['34b1d70f-11c4-42df-935e-d5582c9f1a8e',356,499,"Galaxy's Edge"],
+  ['b2c2549c-e9da-4fdd-98ea-1dcff596fed7',618,324,"Galaxy's Edge"],
+  ['faaa8be9-cc1e-4535-ac20-04a535654bd0',1117,685,'Fantasyland'],
+  ['3638ac09-9fce-4a43-8c79-8ebbe17afce2',1124,369,'Fantasyland'],
+  ['c23af6ba-8515-406a-8a48-d0818ba0bfc9',1000,700,'Fantasyland'],
+  ['9d401ad3-49b2-469f-ac73-93eb429428fb',1022,660,'Fantasyland'],
+  ['4f0053e7-b8db-4833-b02f-35e1c91b4523',900,668,'Fantasyland'],
+  ['90ee50d4-7cc9-4824-b29d-2aac801acc29',895,615,'Fantasyland'],
+  ['a07f3110-013e-43bb-a182-e66bb8b5e28d',1060,648,'Fantasyland'],
+  ['e0cfed11-96d7-40f3-907f-5cfed172592a',1051,612,'Fantasyland'],
+  ['cc980e8e-192f-48b6-848c-27784084e54b',962,585,'Fantasyland'],
+  ['f7904912-3f08-4563-b99e-fd59f43cc9f2',954,630,'Fantasyland'],
+  ['cb929138-d77a-4dd2-983c-f651bbd1bd92',985,548,'Fantasyland'],
+  ['8e686e4c-f3db-4d9c-a185-2d54b1fa8899',920,558,'Fantasyland'],
+  ['90d5a091-478c-4df1-adfe-c605b4005013',951,732,'Fantasyland'],
+  ['888525b0-5a6f-4b8e-9f07-b6a32812b04d',892,440,'Fantasyland'],
+  ['33cbbd09-6d93-40d7-b758-9d7b7d3fd2eb',866,764,'Fantasyland'],
+  ['cd670bff-81d1-4f34-8676-7bafdf49220a',964,191,'Toontown'],
+  ['6ce9cdd1-0a43-459e-83cd-f4cace9cfa7b',1078,306,'Toontown'],
+  ['59647168-d239-4161-8b24-92eb128e96fb',876,309,'Toontown'],
+  ['5a107a57-9174-4f3f-9be7-625a5d5bb899',907,261,'Toontown'],
+  ['c02fb82d-0860-4e95-8c61-899fa594d20e',943,251,'Toontown'],
+  ['b0eca3d3-a519-47f9-a5a7-9911126da2df',965,322,'Toontown'],
+  ['ca32ef8a-ae0d-4c24-bf4f-e59192122e01',926,300,'Toontown'],
+  ['9167db1d-e5e7-46da-a07f-ae30a87bc4c4',1164,1054,'Tomorrowland'],
+  ['cc718d11-fa15-44ee-87d0-ded989ad61bc',1131,902,'Tomorrowland'],
+  ['88197808-3c56-4198-a5a4-6066541251cf',1132,809,'Tomorrowland'],
+  ['64d44aaa-6857-4693-b24b-bcff6c6dcfa1',1241,700,'Tomorrowland'],
+  ['1da85181-bf0f-4ccc-b98e-243142f7347b',1307,759,'Tomorrowland'],
+  ['6c225598-91c9-44a3-95e2-7c423475db61',1054,855,'Tomorrowland'],
+  ['56d0bd6d-5106-4420-8f60-0005475c04c3',1402,790,'Tomorrowland'],
+  ['526ada11-4688-442b-96d4-4077eac4f988',1196,967,'Tomorrowland'],
+  ['e2d460e9-2bef-4613-b126-092ab7cb37e5',952,1227,'Main Street, U.S.A.'],
+  ['bcfd1e17-3eab-4203-b597-6257a257d427',949,1062,'Main Street, U.S.A.'],
+  ['05b17c11-fd4c-4b85-ab45-3e269dc56559',1029,1183,'Main Street, U.S.A.'],
+  ['1b23667a-d8fb-436d-8952-c3e3f2e56d13',1040,1198,'Main Street, U.S.A.']
+];
+const SKIP = new Set(['6e2af074-3a67-4f38-9bcf-2f5a572c87df']); // duplicate Opera House entry
+const LANDS = [["Main Street, U.S.A.",952,1120],["Fantasyland",985,520],["Toontown",1000,225],["Tomorrowland",1215,855],["Frontierland",700,790],["Adventureland",780,1060],["New Orleans Square",560,985],["Bayou Country",385,800],["Galaxy's Edge",520,420]];
+const POS = Object.fromEntries(RIDES.map(r => [r[0], {x:r[1], y:r[2], land:r[3]}]));
+
+/* storage */
+const store = {
+  get(k, d){ try{ const v = localStorage.getItem('ww-' + k); return v ? JSON.parse(v) : d; }catch(e){ return d; } },
+  set(k, v){ try{ localStorage.setItem('ww-' + k, JSON.stringify(v)); }catch(e){} }
+};
+let track = store.get('track', {});      // id -> {wait, since, exact, seen}
+let settings = Object.assign({stale:30, minWait:15}, store.get('settings', {}));
+let timer = store.get('timer', null);
+let log = store.get('log', []);
+let rides = [];                            // current merged view
+let lastFetch = 0, lastError = null, selectedId = null;
+
+const $ = id => document.getElementById(id);
+const clean = n => n.replace(/[™®]/g,'').replace(/^"(.*)"$/,'$1').replace(/\s+-\s+The Adventures/,': The Adventures').trim();
+const fmtMin = m => m < 60 ? Math.round(m) + ' min' : Math.floor(m/60) + ' h ' + String(Math.round(m%60)).padStart(2,'0') + ' min';
+const fmtAge = ms => { const s = Math.round(ms/1000); if (s < 60) return 'just now'; const m = Math.round(s/60); return m < 60 ? m + ' min ago' : fmtMin(m) + ' ago'; };
+
+/* data */
+function standby(e){ return e.queue && e.queue.STANDBY && typeof e.queue.STANDBY.waitTime === 'number' ? e.queue.STANDBY.waitTime : null; }
+function updateTracking(list, now){
+  for (const e of list){
+    const w = e.status === 'OPERATING' ? standby(e) : null;
+    const feedT = Date.parse(e.lastUpdated) || now;
+    const t = track[e.id];
+    if (!t){ track[e.id] = {wait:w, since:Math.min(feedT, now), exact:false, seen:now}; continue; }
+    const gap = now - t.seen > GAP_MS;
+    if (t.wait !== w){
+      // Value changed. If we were watching closely, it changed within the last poll; otherwise we only know the feed's time.
+      track[e.id] = gap ? {wait:w, since:Math.min(feedT, now), exact:false, seen:now} : {wait:w, since:now, exact:true, seen:now};
+    } else {
+      if (gap && feedT > t.since){ t.since = feedT; t.exact = false; } // something changed while we were away
+      t.seen = now;
+    }
+  }
+  store.set('track', track);
+}
+function merge(list, now){
+  const out = [];
+  for (const e of list){
+    if (e.entityType !== 'ATTRACTION' && !POS[e.id]) continue;
+    if (SKIP.has(e.id)) continue;
+    const p = POS[e.id] || null, t = track[e.id] || {since:now, exact:false};
+    const wait = e.status === 'OPERATING' ? standby(e) : null;
+    const staleMin = Math.max(0, (now - t.since) / 60000);
+    const single = e.queue && e.queue.SINGLE_RIDER && typeof e.queue.SINGLE_RIDER.waitTime === 'number' ? e.queue.SINGLE_RIDER.waitTime : null;
+    const ll = e.queue && (e.queue.RETURN_TIME || e.queue.PAID_RETURN_TIME);
+    const hunch = wait !== null && wait >= settings.minWait && staleMin >= settings.stale;
+    out.push({id:e.id, name:clean(e.name), status:e.status, wait, staleMin, exact:t.exact, single, ll, hunch, pos:p, land:p ? p.land : ''});
+  }
+  return out;
+}
+async function refresh(manual){
+  const btn = $('btn-refresh'); btn.classList.add('spin');
+  try{
+    const r = await fetch(API + (manual ? '?t=' + Date.now() : ''), {cache:'no-store'});
+    if (!r.ok) throw new Error('The wait time service answered ' + r.status + '.');
+    const j = await r.json();
+    const now = Date.now();
+    updateTracking(j.liveData || [], now);
+    rides = merge(j.liveData || [], now);
+    lastFetch = now; lastError = null;
+    store.set('last', {at:now, data:j.liveData});
+  }catch(err){
+    lastError = navigator.onLine === false ? 'You are offline. Showing the last waits this phone saw.' : 'Could not reach the wait times right now. Showing the last waits this phone saw.';
+    if (!rides.length){ const c = store.get('last', null); if (c){ rides = merge(c.data, Date.now()); lastFetch = c.at; } }
+  }finally{
+    btn.classList.remove('spin'); render();
+  }
+}
+
+/* map */
+let map, markers = {};
+function initMap(){
+  const b = [[-1320,170],[-90,1470]];
+  map = L.map('map', {crs:L.CRS.Simple, minZoom:-1.5, maxZoom:2, zoomSnap:0.25, attributionControl:false, maxBounds:[[-1500,0],[90,1640]], maxBoundsViscosity:0.8, zoomControl:false});
+  L.imageOverlay('map.svg', b).addTo(map);
+  const el = document.getElementById('map'), w = el.clientWidth || 390, h = el.clientHeight || 700;
+  if (h > w) map.setView([-720, 900], Math.log2(h / 1150)); else map.fitBounds([[-1260,260],[-160,1420]]);
+  const zc = () => el.classList.toggle('z-low', map.getZoom() < -0.1);
+  map.on('zoomend', zc); zc();
+  L.control.zoom({position:'topright'}).addTo(map);
+  for (const l of LANDS){
+    L.marker([-l[2], l[1]], {interactive:false, keyboard:false, icon:L.divIcon({className:'pinwrap', html:'<span class="land-label">' + l[0] + '</span>', iconSize:[0,0]})}).addTo(map);
+  }
+  map.on('click', () => closeSheet());
+}
+const STAR = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l2.9 6 6.6.9-4.8 4.6 1.2 6.5L12 17.4l-5.9 3.1 1.2-6.5L2.5 9.4l6.6-.9z" fill="#1f2f44"/></svg>';
+function pinClass(r){
+  if (r.status !== 'OPERATING') return 'closed';
+  if (r.wait === null) return 'nowait';
+  if (r.hunch) return 'hunch';
+  return r.staleMin >= settings.stale / 2 ? 'stale' : 'fresh';
+}
+function pinHtml(r){
+  const c = pinClass(r) + (r.id === selectedId ? ' sel' : '');
+  let t = '';
+  if (r.status !== 'OPERATING') t = r.status === 'REFURBISHMENT' ? 'Refurb' : r.status === 'DOWN' ? 'Down' : 'Closed';
+  else if (r.wait !== null) t = (r.hunch ? STAR : '') + r.wait;
+  return '<button type="button" class="pin ' + c + '" aria-label="' + r.name.replace(/"/g,'&quot;') + ': ' + describe(r) + '">' + t + '</button>';
+}
+function describe(r){
+  if (r.status !== 'OPERATING') return statusText(r.status);
+  if (r.wait === null) return 'open, no posted wait';
+  return r.wait + ' minute wait, unchanged for ' + (r.exact ? '' : 'at least ') + fmtMin(r.staleMin);
+}
+function statusText(s){ return {CLOSED:'Closed', DOWN:'Temporarily down', REFURBISHMENT:'Closed for refurbishment', OPERATING:'Open'}[s] || s; }
+function renderMap(){
+  if (!map) return;
+  const seen = new Set();
+  for (const r of rides){
+    if (!r.pos) continue; seen.add(r.id);
+    const z = r.hunch ? 1000 : r.status === 'OPERATING' && r.wait !== null ? 500 : 0;
+    const icon = L.divIcon({className:'pinwrap', html:pinHtml(r), iconSize:[0,0]});
+    if (markers[r.id]){ markers[r.id].setIcon(icon); markers[r.id].setZIndexOffset(z); }
+    else {
+      const m = L.marker([-r.pos.y, r.pos.x], {icon, zIndexOffset:z, keyboard:false});
+      m.on('click', ev => { L.DomEvent.stopPropagation(ev); openSheet(r.id); });
+      m.addTo(map); markers[r.id] = m;
+    }
+  }
+  for (const id in markers){ if (!seen.has(id)){ markers[id].remove(); delete markers[id]; } }
+  const hs = rides.filter(r => r.hunch).sort((a,b) => b.staleMin - a.staleMin);
+  const bar = $('hunch-bar'); bar.textContent = ''; bar.hidden = !hs.length || !$('sheet').hidden;
+  for (const r of hs.slice(0,6)){
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'hunch-chip';
+    b.innerHTML = STAR.replace('aria-hidden','width="14" height="14" aria-hidden');
+    b.append(r.name + ' ' + r.wait + ' min');
+    const s = document.createElement('small'); s.textContent = 'still for ' + fmtMin(r.staleMin); b.append(s);
+    b.addEventListener('click', () => openSheet(r.id, true)); bar.append(b);
+  }
+}
+
+/* list */
+function rank(r){ if (r.hunch) return 0; if (r.status === 'OPERATING' && r.wait !== null) return 1; if (r.status === 'OPERATING') return 2; return 3; }
+function renderList(){
+  const ol = $('ride-list'); ol.textContent = '';
+  const sorted = rides.slice().sort((a,b) => rank(a) - rank(b) || b.staleMin - a.staleMin);
+  for (const r of sorted){
+    const li = document.createElement('li');
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'ride' + (r.hunch ? ' hunch' : '');
+    const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = r.name;
+    const ld = document.createElement('span'); ld.className = 'ld';
+    ld.textContent = (r.land ? r.land + ' · ' : '') + (r.status !== 'OPERATING' ? statusText(r.status) : r.wait === null ? 'Open, no posted wait' : (r.hunch ? 'Possible short line · ' : '') + 'unchanged ' + (r.exact ? '' : '≥ ') + fmtMin(r.staleMin));
+    const w = document.createElement('span'); w.className = 'w';
+    w.textContent = r.status === 'OPERATING' && r.wait !== null ? r.wait : '–';
+    const sm = document.createElement('small'); sm.textContent = r.status === 'OPERATING' && r.wait !== null ? 'min posted' : ''; w.append(sm);
+    b.append(nm, ld, w);
+    b.addEventListener('click', () => { show('map'); openSheet(r.id, true); });
+    li.append(b); ol.append(li);
+  }
+}
+
+/* sheet */
+function openSheet(id, pan){
+  const r = rides.find(x => x.id === id); if (!r) return;
+  selectedId = id;
+  $('s-name').textContent = r.name;
+  $('s-land').textContent = (r.land || 'Disneyland Park') + ' · ' + statusText(r.status);
+  $('s-wait').textContent = r.status === 'OPERATING' && r.wait !== null ? r.wait + ' min' : '–';
+  $('s-stale').textContent = r.status === 'OPERATING' && r.wait !== null ? (r.exact ? '' : '≥ ') + fmtMin(r.staleMin) : '–';
+  const note = $('s-note');
+  note.className = 'note' + (r.hunch ? ' hunch' : '');
+  if (r.hunch) note.textContent = 'Possible short line: this posted wait hasn’t moved in ' + fmtMin(r.staleMin) + '.';
+  else if (r.status === 'OPERATING' && r.wait !== null) note.textContent = r.exact ? 'The app saw this number change ' + fmtMin(r.staleMin) + ' ago.' : 'Keep the app open a few minutes to measure this exactly. For now this is a minimum.';
+  else note.textContent = r.status === 'OPERATING' ? 'This one has no posted standby wait.' : '';
+  const extra = [];
+  if (r.single !== null) extra.push('Single rider: ' + r.single + ' min');
+  if (r.ll && r.ll.state) extra.push('Lightning Lane: ' + (r.ll.state === 'AVAILABLE' && r.ll.returnStart ? 'returns from ' + new Date(r.ll.returnStart).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'}) : r.ll.state === 'FINISHED' ? 'sold out' : r.ll.state.toLowerCase().replace('_',' ')));
+  $('s-extra').textContent = extra.join(' · ');
+  const tb = $('s-timer');
+  tb.hidden = !(r.status === 'OPERATING');
+  tb.disabled = !!timer; tb.textContent = timer ? 'A wait timer is already running' : 'Start wait timer';
+  $('sheet').hidden = false; $('hunch-bar').hidden = true;
+  if (pan && r.pos && map) map.flyTo([-r.pos.y + 90, r.pos.x], Math.max(map.getZoom(), 0.5), {duration: matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 0.6});
+  renderMap();
+}
+function closeSheet(){ if ($('sheet').hidden) return; $('sheet').hidden = true; selectedId = null; renderMap(); }
+
+/* timer and log */
+function startTimer(){
+  const r = rides.find(x => x.id === selectedId); if (!r || timer) return;
+  timer = {id:r.id, name:r.name, posted:r.wait, staleMin:Math.round(r.staleMin), exact:r.exact, start:Date.now()};
+  store.set('timer', timer); closeSheet(); show('log'); render();
+}
+function stopTimer(keep){
+  if (!timer) return;
+  if (keep){ log.unshift(Object.assign({}, timer, {end:Date.now(), actualMin:Math.round((Date.now() - timer.start) / 60000)})); store.set('log', log); }
+  timer = null; store.set('timer', null); render();
+}
+function median(a){ if (!a.length) return null; const s = a.slice().sort((x,y) => x-y), m = Math.floor(s.length/2); return s.length % 2 ? s[m] : (s[m-1] + s[m]) / 2; }
+function renderLog(){
+  $('timer-dot').hidden = !timer;
+  const card = $('timer-card'); card.hidden = !timer;
+  if (timer){
+    $('t-name').textContent = timer.name;
+    const s = Math.floor((Date.now() - timer.start) / 1000);
+    $('t-elapsed').textContent = Math.floor(s/60) + ':' + String(s%60).padStart(2,'0');
+    $('t-meta').textContent = timer.posted !== null ? 'Posted ' + timer.posted + ' min, unchanged for ' + (timer.exact ? '' : 'at least ') + fmtMin(timer.staleMin) + ' when you joined.' : 'No posted wait when you joined.';
+  }
+  const has = log.length > 0;
+  $('log-empty').hidden = has; $('log-wrap').hidden = !has; $('log-actions').hidden = !has;
+  const tb = $('log-body'); tb.textContent = '';
+  for (const e of log){
+    const tr = document.createElement('tr');
+    const td = (t, cls, sub) => { const c = document.createElement('td'); if (cls) c.className = cls; c.textContent = t; if (sub){ const s = document.createElement('small'); s.textContent = sub; c.append(s); } tr.append(c); };
+    td(e.name, '', new Date(e.start).toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'}));
+    td(e.posted === null ? '–' : e.posted + ' min', 'num'); td((e.exact ? '' : '≥ ') + e.staleMin + ' min', 'num'); td(e.actualMin + ' min', 'num');
+    tb.append(tr);
+  }
+  const v = $('verdict');
+  const withPost = log.filter(e => e.posted > 0);
+  const st = withPost.filter(e => e.staleMin >= settings.stale), fr = withPost.filter(e => e.staleMin < settings.stale);
+  if (withPost.length){
+    const pct = g => { const m = median(g.map(e => e.actualMin / e.posted)); return m === null ? null : Math.round(m * 100); };
+    const ps = pct(st), pf = pct(fr);
+    v.hidden = false; v.textContent = '';
+    const h = document.createElement('strong'); h.textContent = 'Your evidence so far'; v.append(h, document.createElement('br'));
+    v.append('Stale postings (unchanged ' + settings.stale + '+ min): ' + (ps === null ? 'none timed yet' : 'your actual wait was typically ' + ps + '% of posted, across ' + st.length + ' ride' + (st.length === 1 ? '' : 's')) + '.');
+    v.append(document.createElement('br'));
+    v.append('Fresher postings: ' + (pf === null ? 'none timed yet' : 'typically ' + pf + '% of posted, across ' + fr.length + ' ride' + (fr.length === 1 ? '' : 's')) + '.');
+    if (st.length + fr.length < 10){ v.append(document.createElement('br')); const s = document.createElement('span'); s.className = 'muted'; s.textContent = 'A handful of rides can mislead; aim for 10 or more in each group.'; v.append(s); }
+  } else v.hidden = true;
+}
+function exportCsv(){
+  const rows = [['date','ride','posted_min','unchanged_min','unchanged_exact','actual_min']];
+  for (const e of log) rows.push([new Date(e.start).toISOString(), e.name, e.posted ?? '', e.staleMin, e.exact ? 'yes' : 'no', e.actualMin]);
+  const csv = rows.map(r => r.map(c => /[",\n]/.test(String(c)) ? '"' + String(c).replace(/"/g,'""') + '"' : c).join(',')).join('\n');
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], {type:'text/csv'})); a.download = 'wait-watcher-log.csv'; document.body.append(a); a.click(); a.remove();
+}
+
+/* shell */
+function render(){
+  const now = Date.now();
+  if (rides.length) rides = rides.map(r => { const t = track[r.id]; if (!t) return r; const staleMin = Math.max(0, (now - t.since)/60000); return Object.assign({}, r, {staleMin, exact:t.exact, hunch: r.wait !== null && r.status === 'OPERATING' && r.wait >= settings.minWait && staleMin >= settings.stale}); });
+  $('status-line').textContent = lastError ? lastError : lastFetch ? 'Waits updated ' + fmtAge(now - lastFetch) + ' · ' + rides.filter(r => r.hunch).length + ' possible short lines' : 'Loading wait times…';
+  renderMap(); renderList(); renderLog();
+  if (!$('sheet').hidden && selectedId) { const keep = selectedId; const r = rides.find(x => x.id === keep); if (r) { $('s-stale').textContent = r.status === 'OPERATING' && r.wait !== null ? (r.exact ? '' : '≥ ') + fmtMin(r.staleMin) : '–'; } }
+}
+function show(view){
+  for (const v of ['map','list','log']) $('view-' + v).hidden = v !== view;
+  document.querySelectorAll('.tab').forEach(t => { if (t.dataset.view === view) t.setAttribute('aria-current','page'); else t.removeAttribute('aria-current'); });
+  if (view !== 'map') closeSheet();
+  if (view === 'map' && map) setTimeout(() => map.invalidateSize(), 0);
+}
+function init(){
+  initMap();
+  document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => show(t.dataset.view)));
+  $('btn-refresh').addEventListener('click', () => refresh(true));
+  $('sheet-x').addEventListener('click', closeSheet);
+  $('s-timer').addEventListener('click', startTimer);
+  $('t-stop').addEventListener('click', () => stopTimer(true));
+  $('t-cancel').addEventListener('click', () => stopTimer(false));
+  $('btn-export').addEventListener('click', exportCsv);
+  $('btn-clear').addEventListener('click', () => { $('clear-confirm').hidden = false; });
+  $('clear-no').addEventListener('click', () => { $('clear-confirm').hidden = true; });
+  $('clear-yes').addEventListener('click', () => { log = []; store.set('log', log); $('clear-confirm').hidden = true; render(); });
+  const ss = $('set-stale'), sm = $('set-minwait'); ss.value = settings.stale; sm.value = settings.minWait;
+  const saveSet = () => { const a = parseInt(ss.value, 10), b = parseInt(sm.value, 10); if (a >= 5) settings.stale = a; if (b >= 0) settings.minWait = b; store.set('settings', settings); render(); };
+  ss.addEventListener('change', saveSet); sm.addEventListener('change', saveSet);
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet(); });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && Date.now() - lastFetch > 60000) refresh(); });
+  setInterval(() => { if (!document.hidden) refresh(); }, POLL_MS);
+  setInterval(() => { if (timer) renderLog(); }, 1000);
+  setInterval(render, 30000);
+  refresh();
+  if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+init();

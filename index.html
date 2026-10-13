@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Wait Watcher</title>
+<meta name="description" content="Disneyland wait times on a map, with how long each posted wait has gone unchanged.">
+<meta name="theme-color" content="#1f2f44">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Wait Watcher">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Atkinson+Hyperlegible:wght@400;700&display=swap">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div id="app">
+  <header class="top">
+    <div class="brand"><h1>Wait Watcher</h1><p id="status-line">Loading wait times…</p></div>
+    <button class="btn icon" id="btn-refresh" type="button" aria-label="Refresh wait times">
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+  </header>
+
+  <main>
+    <section id="view-map" class="view">
+      <div id="map" aria-label="Map of Disneyland Park with wait times"></div>
+      <div class="legend" aria-hidden="true">
+        <span><i class="sw fresh"></i>Recently changed</span>
+        <span><i class="sw stale"></i>Unchanged a while</span>
+        <span><i class="sw hunch"></i>Possible short line</span>
+      </div>
+      <div class="hunch-bar" id="hunch-bar" hidden></div>
+    </section>
+
+    <section id="view-list" class="view" hidden>
+      <div class="list-head">
+        <h2>Rides by staleness</h2>
+        <p class="muted">Longest-unchanged posted waits first. Rides flagged as possible short lines sit at the top.</p>
+      </div>
+      <ol class="rides" id="ride-list"></ol>
+      <details class="settings">
+        <summary>Flag settings</summary>
+        <div class="set-row"><label for="set-stale">Flag after unchanged for</label><span><input id="set-stale" type="number" min="5" max="240" step="5" inputmode="numeric"> min</span></div>
+        <div class="set-row"><label for="set-minwait">Only if posted wait is at least</label><span><input id="set-minwait" type="number" min="0" max="180" step="5" inputmode="numeric"> min</span></div>
+      </details>
+    </section>
+
+    <section id="view-log" class="view" hidden>
+      <div class="timer-card" id="timer-card" hidden>
+        <p class="eyebrow">Timing your wait</p>
+        <h2 id="t-name"></h2>
+        <p class="big" id="t-elapsed">0:00</p>
+        <p class="muted" id="t-meta"></p>
+        <div class="row">
+          <button class="btn primary" id="t-stop" type="button">I'm boarding</button>
+          <button class="btn" id="t-cancel" type="button">Cancel</button>
+        </div>
+      </div>
+      <div class="list-head">
+        <h2>My waits</h2>
+        <p class="muted" id="log-empty">No timed waits yet. Open a ride on the map and tap “Start wait timer” when you join the line.</p>
+      </div>
+      <div class="verdict" id="verdict" hidden></div>
+      <div class="table-wrap" id="log-wrap" hidden>
+        <table class="log">
+          <thead><tr><th>Ride</th><th class="num">Posted</th><th class="num">Unchanged</th><th class="num">Actual</th></tr></thead>
+          <tbody id="log-body"></tbody>
+        </table>
+      </div>
+      <div class="row" id="log-actions" hidden>
+        <button class="btn" id="btn-export" type="button">Export CSV</button>
+        <button class="btn danger" id="btn-clear" type="button">Clear log</button>
+      </div>
+      <div class="confirm" id="clear-confirm" hidden>
+        <p>Delete every timed wait on this phone?</p>
+        <div class="row"><button class="btn danger" id="clear-yes" type="button">Delete all</button><button class="btn" id="clear-no" type="button">Keep</button></div>
+      </div>
+      <details class="about">
+        <summary>How the staleness clock works</summary>
+        <p>Every two minutes the app reads Disneyland's posted waits through ThemeParks.wiki and notes when each ride's posted number last changed.</p>
+        <p>While the app has been open for a while, “unchanged” is measured directly. Right after you open it, the app falls back to the feed's own update time, which moves whenever anything about the ride changes, so those figures are a minimum and show as “at least”.</p>
+        <p>A stale posted wait is a hunch, not a promise. Timing your own waits here builds the evidence either way.</p>
+        <p class="muted">Wait data from <a href="https://themeparks.wiki">ThemeParks.wiki</a>. Map data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>. Not affiliated with Disney.</p>
+      </details>
+    </section>
+  </main>
+
+  <section class="sheet" id="sheet" hidden aria-live="polite">
+    <button class="x" id="sheet-x" type="button" aria-label="Close">×</button>
+    <h2 id="s-name"></h2>
+    <p class="muted" id="s-land"></p>
+    <div class="stats">
+      <div><span class="k">Posted wait</span><span class="v" id="s-wait"></span></div>
+      <div><span class="k">Unchanged for</span><span class="v" id="s-stale"></span></div>
+    </div>
+    <p id="s-note" class="note"></p>
+    <p id="s-extra" class="muted"></p>
+    <button class="btn primary wide" id="s-timer" type="button">Start wait timer</button>
+  </section>
+
+  <nav class="tabs" aria-label="Views">
+    <button type="button" class="tab" data-view="map" aria-current="page">Map</button>
+    <button type="button" class="tab" data-view="list">List</button>
+    <button type="button" class="tab" data-view="log">My waits<span class="dot" id="timer-dot" hidden></span></button>
+  </nav>
+</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
