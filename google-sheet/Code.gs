@@ -6,14 +6,15 @@
  * The app sends each finished wait with an id (its start time). Rows already in the sheet are skipped,
  * so the app can safely retry after a dropped connection.
  */
-const SHEET_NAME = ''; // leave blank to use the first tab
+const SHEET_NAME = 'Timed Waits'; // its own tab, separate from the Posted Waits logger
 const HEADERS = ['id','date','ride','posted_min','unchanged_min','unchanged_exact','actual_min','actual_sec',
   'sign_lap_sec','sign_to_board_sec','preshow_laps','ride_went_down','synced_at'];
 
 function sheet_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sh = SHEET_NAME ? ss.getSheetByName(SHEET_NAME) : ss.getSheets()[0];
-  if (sh.getLastRow() === 0) sh.appendRow(HEADERS);
+  let sh = ss.getSheetByName(SHEET_NAME);
+  if (!sh) sh = ss.insertSheet(SHEET_NAME, 0);
+  if (sh.getLastRow() === 0) { sh.appendRow(HEADERS); sh.setFrozenRows(1); sh.getRange(1, 1, 1, HEADERS.length).setFontWeight('bold'); }
   return sh;
 }
 

@@ -1,7 +1,7 @@
 # Google Sheet sync setup
 
 Wait Watcher sends each finished timed wait to a Google Sheet through a small Apps Script.
-The sheet **Wait Watcher Log** is already in your Google Drive with the column headers in place.
+The sheet **Wait Watcher Log** is already in your Google Drive. Timed waits go to its **Timed Waits** tab (created automatically if missing), separate from any **Posted Waits** logger tab.
 
 1. Open **Wait Watcher Log** in Google Sheets on a computer.
 2. Choose **Extensions → Apps Script**. Delete the sample code and paste in everything from `Code.gs` in this folder. Click **Save**.
