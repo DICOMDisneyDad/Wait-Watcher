@@ -7,14 +7,17 @@
  * so the app can safely retry after a dropped connection.
  */
 const SHEET_NAME = 'Timed Waits'; // its own tab, separate from the Posted Waits logger
+// reopened_min was added later, so it sits after synced_at; sheet_() adds the header to older sheets.
 const HEADERS = ['id','date','ride','posted_min','unchanged_min','unchanged_exact','actual_min','actual_sec',
-  'sign_lap_sec','sign_to_board_sec','preshow_laps','ride_went_down','synced_at'];
+  'sign_lap_sec','sign_to_board_sec','preshow_laps','ride_went_down','synced_at','reopened_min'];
 
 function sheet_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   let sh = ss.getSheetByName(SHEET_NAME);
   if (!sh) sh = ss.insertSheet(SHEET_NAME, 0);
-  if (sh.getLastRow() === 0) { sh.appendRow(HEADERS); sh.setFrozenRows(1); sh.getRange(1, 1, 1, HEADERS.length).setFontWeight('bold'); }
+  if (sh.getLastRow() === 0) { sh.appendRow(HEADERS); sh.setFrozenRows(1); }
+  else if (sh.getLastColumn() < HEADERS.length) sh.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
+  sh.getRange(1, 1, 1, HEADERS.length).setFontWeight('bold');
   return sh;
 }
 
@@ -46,7 +49,7 @@ function doPost(e) {
       have.add(id);
       add.push([id, r.date ? new Date(r.date) : '', r.ride || '', num_(r.posted_min), num_(r.unchanged_min), r.unchanged_exact || '',
         num_(r.actual_min), num_(r.actual_sec), num_(r.sign_lap_sec), num_(r.sign_to_board_sec), r.preshow_laps || '',
-        r.ride_went_down || '', now]);
+        r.ride_went_down || '', now, num_(r.reopened_min)]);
     }
     if (add.length) sh.getRange(sh.getLastRow() + 1, 1, add.length, HEADERS.length).setValues(add);
     return json_({ok: true, ids: ids, added: add.length});

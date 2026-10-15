@@ -35,7 +35,8 @@
       <div class="legend" aria-hidden="true">
         <span><i class="sw fresh"></i>Recently changed</span>
         <span><i class="sw stale"></i>Unchanged a while</span>
-        <span><i class="sw hunch"></i>Possible short line</span>
+        <span><i class="sw hunch"></i>Unchanged a long time</span>
+        <span><i class="sw reopen"></i>Just reopened</span>
       </div>
       <div class="hunch-bar" id="hunch-bar" hidden></div>
     </section>
@@ -43,13 +44,14 @@
     <section id="view-list" class="view" hidden>
       <div class="list-head">
         <h2>Rides by staleness</h2>
-        <p class="muted">Longest-unchanged posted waits first. Rides flagged as possible short lines sit at the top.</p>
+        <p class="muted">Longest-unchanged posted waits first. Rides that just reopened after being down, then rides flagged as possible short lines, sit at the top.</p>
       </div>
       <ol class="rides" id="ride-list"></ol>
       <details class="settings">
         <summary>Flag settings</summary>
         <div class="set-row"><label for="set-stale">Flag after unchanged for</label><span><input id="set-stale" type="number" min="5" max="240" step="5" inputmode="numeric"> min</span></div>
         <div class="set-row"><label for="set-minwait">Only if posted wait is at least</label><span><input id="set-minwait" type="number" min="0" max="180" step="5" inputmode="numeric"> min</span></div>
+        <div class="set-row"><label for="set-reopen">Flag a ride that reopened after being down for</label><span><input id="set-reopen" type="number" min="5" max="60" step="5" inputmode="numeric"> min</span></div>
       </details>
     </section>
 
@@ -98,10 +100,22 @@
         </div>
         <p class="muted small">Each wait is sent when you stop the timer. With no signal it waits and retries, so nothing is lost. Setup steps are in the repo's google-sheet folder.</p>
       </details>
+      <details class="settings sync" id="logger-box">
+        <summary>Posted wait logger</summary>
+        <p class="muted" id="logger-status">Not connected. “Unchanged for” times are measured only while the app is open.</p>
+        <label class="muted" for="logger-url">Logger web app URL</label>
+        <input id="logger-url" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://script.google.com/macros/s/…/exec">
+        <div class="row">
+          <button class="btn primary" id="logger-save" type="button">Save and test</button>
+        </div>
+        <p class="muted small">The logger checks posted waits every 5 minutes around the clock, so “unchanged for” times are exact as soon as you open the app, and rides that just came back from being down are flagged. It's a different URL from the Google Sheet sync. Setup steps are in the repo's google-sheet folder.</p>
+      </details>
       <details class="about">
         <summary>How the staleness clock works</summary>
         <p>Every two minutes the app reads posted waits for both Disneyland and California Adventure through ThemeParks.wiki and notes when each ride's posted number last changed. Both parks are tracked whichever one is on screen, so switching parks doesn't reset the clock.</p>
         <p>While the app has been open for a while, “unchanged” is measured directly. Right after you open it, the app falls back to the feed's own update time, which moves whenever anything about the ride changes, so those figures are a minimum and show as “at least”.</p>
+        <p>With the posted wait logger connected, the app reads when each number last changed from the logger, which checks every 5 minutes whether or not the app is open. Those times are exact (to within about 5 minutes) right away.</p>
+        <p>A green arrow marks a ride that reopened after being down. People leave the line when a ride goes down, so for a short while after it reopens the real line is often shorter than the posted wait. That flag lasts 20 minutes by default (List → Flag settings).</p>
         <p>A stale posted wait is a hunch, not a promise. Timing your own waits here builds the evidence either way.</p>
       </details>
       <details class="about" id="protocol">

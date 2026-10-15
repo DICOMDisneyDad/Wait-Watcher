@@ -199,8 +199,9 @@ const store = {
   get(k, d){ try{ const v = localStorage.getItem('ww-' + k); return v ? JSON.parse(v) : d; }catch(e){ return d; } },
   set(k, v){ try{ localStorage.setItem('ww-' + k, JSON.stringify(v)); }catch(e){} }
 };
-let track = store.get('track', {});      // id -> {wait, since, exact, seen}
-let settings = Object.assign({stale:30, minWait:15}, store.get('settings', {}));
+let track = store.get('track', {});      // id -> {wait, since, exact, seen, status, statusSince, prevStatus}
+let settings = Object.assign({stale:30, minWait:15, reopen:20}, store.get('settings', {}));
+let logger = store.get('logger', null);   // last reading from the posted wait logger: {at, checkedAt, rides}
 let timer = store.get('timer', null);
 let log = store.get('log', []);
 let parkKey = PARKS[store.get('park', 'dl')] ? store.get('park', 'dl') : 'dl';
@@ -221,17 +222,65 @@ function updateTracking(list, now){
     const w = e.status === 'OPERATING' ? standby(e) : null;
     const feedT = Date.parse(e.lastUpdated) || now;
     const t = track[e.id];
-    if (!t){ track[e.id] = {wait:w, since:Math.min(feedT, now), exact:false, seen:now}; continue; }
+    if (!t){ track[e.id] = {wait:w, since:Math.min(feedT, now), exact:false, seen:now, status:e.status, statusSince:now, prevStatus:''}; continue; }
     const gap = now - t.seen > GAP_MS;
     if (t.wait !== w){
       // Value changed. If we were watching closely, it changed within the last poll; otherwise we only know the feed's time.
-      track[e.id] = gap ? {wait:w, since:Math.min(feedT, now), exact:false, seen:now} : {wait:w, since:now, exact:true, seen:now};
-    } else {
-      if (gap && feedT > t.since){ t.since = feedT; t.exact = false; } // something changed while we were away
-      t.seen = now;
+      Object.assign(t, gap ? {wait:w, since:Math.min(feedT, now), exact:false} : {wait:w, since:now, exact:true});
+    } else if (gap && feedT > t.since){ t.since = feedT; t.exact = false; } // something changed while we were away
+    if (t.status !== e.status){
+      // Status changed. While watching we know when and from what; after a gap we don't, so no "just reopened" guess.
+      t.prevStatus = gap || !t.status ? '' : t.status; t.statusSince = now; t.status = e.status;
+    }
+    t.seen = now;
+  }
+  applyLogger(list, now);
+  store.set('track', track);
+}
+
+/* Posted wait logger: a server-side script that checks every 5 minutes around the clock,
+   so it knows when each posted wait last changed even while this app was closed. */
+const LOGGER_MAX_AGE = 15 * 60 * 1000; // a logger that hasn't checked in this long is ignored
+const SAME_CHANGE = 6 * 60 * 1000;     // app and logger times this close describe the same change
+function loggerUrl(){ return (settings.loggerUrl || '').trim(); }
+function loggerLive(now){ return !!(loggerUrl() && logger && logger.rides && now - logger.checkedAt <= LOGGER_MAX_AGE); }
+function applyLogger(list, now){
+  if (!loggerLive(now)) return;
+  for (const e of list){
+    const L = logger.rides[e.id], t = track[e.id];
+    if (!L || !t) continue;
+    const lw = L.status === 'OPERATING' && typeof L.wait === 'number' ? L.wait : null;
+    if (L.status !== e.status || lw !== t.wait) continue; // the app has a newer reading; trust its own clock
+    if (t.exact && t.since > L.since + SAME_CHANGE){ /* the app saw a change between logger checks */ }
+    else if (t.exact && t.since >= L.since - SAME_CHANGE){ t.since = Math.min(t.since, L.since); }
+    else if (L.exact){ t.since = L.since; t.exact = true; }
+    else { t.since = Math.min(t.since, L.since); t.exact = false; }
+    // Status history: the logger's is complete; the app's only covers time it was open.
+    if (L.prevStatus && !(t.prevStatus && t.statusSince > L.statusSince + SAME_CHANGE)){
+      t.prevStatus = L.prevStatus; t.statusSince = L.statusSince;
     }
   }
-  store.set('track', track);
+}
+async function fetchLogger(){
+  const url = loggerUrl(); if (!url) return;
+  try{
+    const ctl = typeof AbortController === 'function' ? new AbortController() : null;
+    const stop = ctl ? setTimeout(() => ctl.abort(), 8000) : 0; // a slow logger must not hold up the live waits
+    const r = await fetch(url, {cache:'no-store', signal:ctl ? ctl.signal : undefined}); const j = await r.json();
+    clearTimeout(stop);
+    if (j.app !== 'wait-watcher-logger' || !j.rides) throw new Error('wrong script');
+    logger = {at:Date.now(), checkedAt:j.checkedAt, rides:j.rides}; store.set('logger', logger);
+    loggerMsg = ''; return true;
+  }catch(err){ loggerMsg = 'Couldn’t reach the logger just now. Using the app’s own clock.'; return false; }
+}
+
+// Staleness and the two short-line flags, from a ride's tracking record.
+function flagsFor(status, wait, t, now){
+  const staleMin = Math.max(0, (now - t.since) / 60000);
+  const reopenMin = status === 'OPERATING' && t.prevStatus === 'DOWN' && t.statusSince ? Math.max(0, (now - t.statusSince) / 60000) : null;
+  const reopen = reopenMin !== null && reopenMin <= settings.reopen;
+  const hunch = !reopen && status === 'OPERATING' && wait !== null && wait >= settings.minWait && staleMin >= settings.stale;
+  return {staleMin, exact:t.exact, reopenMin, reopen, hunch};
 }
 function merge(list, now){
   const out = [], pid = park().id;
@@ -241,20 +290,20 @@ function merge(list, now){
     if (SKIP.has(e.id)) continue;
     const p = POS[e.id] || null, t = track[e.id] || {since:now, exact:false};
     const wait = e.status === 'OPERATING' ? standby(e) : null;
-    const staleMin = Math.max(0, (now - t.since) / 60000);
     const single = e.queue && e.queue.SINGLE_RIDER && typeof e.queue.SINGLE_RIDER.waitTime === 'number' ? e.queue.SINGLE_RIDER.waitTime : null;
     const ll = e.queue && (e.queue.RETURN_TIME || e.queue.PAID_RETURN_TIME);
-    const hunch = wait !== null && wait >= settings.minWait && staleMin >= settings.stale;
-    out.push({id:e.id, name:clean(e.name), status:e.status, wait, staleMin, exact:t.exact, single, ll, hunch, pos:p, land:p ? p.land : ''});
+    out.push(Object.assign({id:e.id, name:clean(e.name), status:e.status, wait, single, ll, pos:p, land:p ? p.land : ''}, flagsFor(e.status, wait, t, now)));
   }
   return out;
 }
 async function refresh(manual){
   const btn = $('btn-refresh'); btn.classList.add('spin');
   try{
+    const lp = fetchLogger();
     const r = await fetch(API + (manual ? '?t=' + Date.now() : ''), {cache:'no-store'});
     if (!r.ok) throw new Error('The wait time service answered ' + r.status + '.');
     const j = await r.json();
+    await lp;
     const now = Date.now();
     liveData = (j.liveData || []).filter(e => e.entityType === 'ATTRACTION' || POS[e.id]);
     updateTracking(liveData, now);
@@ -308,9 +357,11 @@ function setPark(key){
 function renderParkSwitch(){
   document.querySelectorAll('.park-btn').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.park === parkKey)));
 }
+const REOPEN = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12a7 7 0 1 0 2.05-4.95M5 4v4h4" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const STAR = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l2.9 6 6.6.9-4.8 4.6 1.2 6.5L12 17.4l-5.9 3.1 1.2-6.5L2.5 9.4l6.6-.9z" fill="#1f2f44"/></svg>';
 function pinClass(r){
   if (r.status !== 'OPERATING') return 'closed';
+  if (r.reopen) return 'reopen';
   if (r.wait === null) return 'nowait';
   if (r.hunch) return 'hunch';
   return r.staleMin >= settings.stale / 2 ? 'stale' : 'fresh';
@@ -319,11 +370,13 @@ function pinHtml(r){
   const c = pinClass(r) + (r.id === selectedId ? ' sel' : '');
   let t = '';
   if (r.status !== 'OPERATING') t = r.status === 'REFURBISHMENT' ? 'Refurb' : r.status === 'DOWN' ? 'Down' : 'Closed';
+  else if (r.reopen) t = REOPEN + (r.wait !== null ? r.wait : '');
   else if (r.wait !== null) t = (r.hunch ? STAR : '') + r.wait;
   return '<button type="button" class="pin ' + c + '" aria-label="' + r.name.replace(/"/g,'&quot;') + ': ' + describe(r) + '">' + t + '</button>';
 }
 function describe(r){
   if (r.status !== 'OPERATING') return statusText(r.status);
+  if (r.reopen) return 'just reopened ' + fmtAge(r.reopenMin * 60000) + (r.wait !== null ? ', ' + r.wait + ' minute posted wait' : '');
   if (r.wait === null) return 'open, no posted wait';
   return r.wait + ' minute wait, unchanged for ' + (r.exact ? '' : 'at least ') + fmtMin(r.staleMin);
 }
@@ -333,7 +386,7 @@ function renderMap(){
   const seen = new Set();
   for (const r of rides){
     if (!r.pos) continue; seen.add(r.id);
-    const z = r.hunch ? 1000 : r.status === 'OPERATING' && r.wait !== null ? 500 : 0;
+    const z = r.reopen ? 1100 : r.hunch ? 1000 : r.status === 'OPERATING' && r.wait !== null ? 500 : 0;
     const icon = L.divIcon({className:'pinwrap', html:pinHtml(r), iconSize:[0,0]});
     if (markers[r.id]){ markers[r.id].setIcon(icon); markers[r.id].setZIndexOffset(z); }
     else {
@@ -343,28 +396,30 @@ function renderMap(){
     }
   }
   for (const id in markers){ if (!seen.has(id)){ markers[id].remove(); delete markers[id]; } }
-  const hs = rides.filter(r => r.hunch).sort((a,b) => b.staleMin - a.staleMin);
+  // Flag chips: just-reopened rides first (they're time-sensitive), then stale postings.
+  const hs = rides.filter(r => r.reopen).sort((a,b) => a.reopenMin - b.reopenMin)
+    .concat(rides.filter(r => r.hunch).sort((a,b) => b.staleMin - a.staleMin));
   const bar = $('hunch-bar'); bar.textContent = ''; bar.hidden = !hs.length || !$('sheet').hidden;
   for (const r of hs.slice(0,6)){
-    const b = document.createElement('button'); b.type = 'button'; b.className = 'hunch-chip';
-    b.innerHTML = STAR.replace('aria-hidden','width="14" height="14" aria-hidden');
-    b.append(r.name + ' ' + r.wait + ' min');
-    const s = document.createElement('small'); s.textContent = 'still for ' + fmtMin(r.staleMin); b.append(s);
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'hunch-chip' + (r.reopen ? ' reopen' : '');
+    b.innerHTML = (r.reopen ? REOPEN : STAR).replace('aria-hidden','width="14" height="14" aria-hidden');
+    b.append(r.name + (r.wait !== null ? ' ' + r.wait + ' min' : ''));
+    const s = document.createElement('small'); s.textContent = r.reopen ? 'reopened ' + fmtAge(r.reopenMin * 60000) : 'still for ' + fmtMin(r.staleMin); b.append(s);
     b.addEventListener('click', () => openSheet(r.id, true)); bar.append(b);
   }
 }
 
 /* list */
-function rank(r){ if (r.hunch) return 0; if (r.status === 'OPERATING' && r.wait !== null) return 1; if (r.status === 'OPERATING') return 2; return 3; }
+function rank(r){ if (r.reopen) return -1; if (r.hunch) return 0; if (r.status === 'OPERATING' && r.wait !== null) return 1; if (r.status === 'OPERATING') return 2; return 3; }
 function renderList(){
   const ol = $('ride-list'); ol.textContent = '';
-  const sorted = rides.slice().sort((a,b) => rank(a) - rank(b) || b.staleMin - a.staleMin);
+  const sorted = rides.slice().sort((a,b) => rank(a) - rank(b) || (a.reopen ? a.reopenMin - b.reopenMin : b.staleMin - a.staleMin));
   for (const r of sorted){
     const li = document.createElement('li');
-    const b = document.createElement('button'); b.type = 'button'; b.className = 'ride' + (r.hunch ? ' hunch' : '');
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'ride' + (r.reopen ? ' reopen' : r.hunch ? ' hunch' : '');
     const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = r.name;
     const ld = document.createElement('span'); ld.className = 'ld';
-    ld.textContent = (r.land ? r.land + ' · ' : '') + (r.status !== 'OPERATING' ? statusText(r.status) : r.wait === null ? 'Open, no posted wait' : (r.hunch ? 'Possible short line · ' : '') + 'unchanged ' + (r.exact ? '' : '≥ ') + fmtMin(r.staleMin));
+    ld.textContent = (r.land ? r.land + ' · ' : '') + (r.status !== 'OPERATING' ? statusText(r.status) : r.reopen ? 'Just reopened ' + fmtAge(r.reopenMin * 60000) : r.wait === null ? 'Open, no posted wait' : (r.hunch ? 'Possible short line · ' : '') + 'unchanged ' + (r.exact ? '' : '≥ ') + fmtMin(r.staleMin));
     const w = document.createElement('span'); w.className = 'w';
     w.textContent = r.status === 'OPERATING' && r.wait !== null ? r.wait : '–';
     const sm = document.createElement('small'); sm.textContent = r.status === 'OPERATING' && r.wait !== null ? 'min posted' : ''; w.append(sm);
@@ -383,9 +438,10 @@ function openSheet(id, pan){
   $('s-wait').textContent = r.status === 'OPERATING' && r.wait !== null ? r.wait + ' min' : '–';
   $('s-stale').textContent = r.status === 'OPERATING' && r.wait !== null ? (r.exact ? '' : '≥ ') + fmtMin(r.staleMin) : '–';
   const note = $('s-note');
-  note.className = 'note' + (r.hunch ? ' hunch' : '');
-  if (r.hunch) note.textContent = 'Possible short line: this posted wait hasn’t moved in ' + fmtMin(r.staleMin) + '.';
-  else if (r.status === 'OPERATING' && r.wait !== null) note.textContent = r.exact ? 'The app saw this number change ' + fmtMin(r.staleMin) + ' ago.' : 'Keep the app open a few minutes to measure this exactly. For now this is a minimum.';
+  note.className = 'note' + (r.reopen ? ' reopen' : r.hunch ? ' hunch' : '');
+  if (r.reopen) note.textContent = 'Just reopened ' + fmtAge(r.reopenMin * 60000) + ' after being down. Lines are often short right after a reopening, before the posted wait catches up.';
+  else if (r.hunch) note.textContent = 'Possible short line: this posted wait hasn’t moved in ' + fmtMin(r.staleMin) + '.';
+  else if (r.status === 'OPERATING' && r.wait !== null) note.textContent = r.exact ? 'This posted wait last changed ' + fmtMin(r.staleMin) + ' ago.' : loggerUrl() ? 'The logger hasn’t seen this number change yet, so this is a minimum.' : 'Keep the app open a few minutes to measure this exactly. For now this is a minimum.';
   else note.textContent = r.status === 'OPERATING' ? 'This one has no posted standby wait.' : '';
   const extra = [];
   if (r.single !== null) extra.push('Single rider: ' + r.single + ' min');
@@ -412,7 +468,7 @@ function closeSheet(){ if ($('sheet').hidden) return; $('sheet').hidden = true; 
 /* timer and log */
 function startTimer(){
   const r = rides.find(x => x.id === selectedId); if (!r || timer) return;
-  timer = {id:r.id, name:r.name, posted:r.wait, staleMin:Math.round(r.staleMin), exact:r.exact, start:Date.now(), laps:[], flagged:false};
+  timer = {id:r.id, name:r.name, posted:r.wait, staleMin:Math.round(r.staleMin), exact:r.exact, reopenMin:r.reopenMin === null ? null : Math.round(r.reopenMin), start:Date.now(), laps:[], flagged:false};
   store.set('timer', timer); closeSheet(); show('log'); render();
 }
 function stopTimer(keep){
@@ -466,6 +522,8 @@ function renderTimer(rebuild){
 function lapSummary(e){
   return (e.laps || []).map(l => (l.label === SIGN_LAP ? 'Sign' : l.label.replace(/^(Entering|Boarding) the /, '')) + ' ' + fmtClock(l.at)).join(' · ');
 }
+// A timed wait that started within the "just reopened" window after a ride came back from being down.
+function wasReopen(e){ return typeof e.reopenMin === 'number' && e.reopenMin <= settings.reopen; }
 function median(a){ if (!a.length) return null; const s = a.slice().sort((x,y) => x-y), m = Math.floor(s.length/2); return s.length % 2 ? s[m] : (s[m-1] + s[m]) / 2; }
 function renderLog(){
   $('timer-dot').hidden = !timer;
@@ -473,7 +531,7 @@ function renderLog(){
   if (timer){
     $('t-name').textContent = timer.name;
     renderTimer(false);
-    $('t-meta').textContent = timer.posted !== null ? 'Posted ' + timer.posted + ' min, unchanged for ' + (timer.exact ? '' : 'at least ') + fmtMin(timer.staleMin) + ' when you joined.' : 'No posted wait when you joined.';
+    $('t-meta').textContent = timer.posted !== null ? 'Posted ' + timer.posted + ' min, unchanged for ' + (timer.exact ? '' : 'at least ') + fmtMin(timer.staleMin) + ' when you joined.' + (wasReopen(timer) ? ' Reopened ' + timer.reopenMin + ' min before.' : '') : 'No posted wait when you joined.';
   }
   const has = log.length > 0;
   $('log-empty').hidden = has; $('log-wrap').hidden = !has; $('log-actions').hidden = !has;
@@ -483,35 +541,49 @@ function renderLog(){
     const td = (t, cls, sub) => { const c = document.createElement('td'); if (cls) c.className = cls; c.textContent = t; if (sub){ const s = document.createElement('small'); s.textContent = sub; c.append(s); } tr.append(c); };
     const when = new Date(e.start).toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'});
     const laps = lapSummary(e);
-    td(e.name, '', [when, laps, e.flagged ? '⚑ Ride went down (left out of summary)' : '', syncUrl() && !e.synced ? 'Not in sheet yet' : ''].filter(Boolean).join(' · '));
+    td(e.name, '', [when, wasReopen(e) ? 'Joined ' + e.reopenMin + ' min after a reopening' : '', laps, e.flagged ? '⚑ Ride went down (left out of summary)' : '', syncUrl() && !e.synced ? 'Not in sheet yet' : ''].filter(Boolean).join(' · '));
     td(e.posted === null ? '–' : e.posted + ' min', 'num'); td((e.exact ? '' : '≥ ') + e.staleMin + ' min', 'num'); td(e.actualMin + ' min', 'num');
     tb.append(tr);
   }
   const v = $('verdict');
   const withPost = log.filter(e => e.posted > 0 && !e.flagged);
-  const st = withPost.filter(e => e.staleMin >= settings.stale), fr = withPost.filter(e => e.staleMin < settings.stale);
+  const ro = withPost.filter(wasReopen), rest = withPost.filter(e => !wasReopen(e));
+  const st = rest.filter(e => e.staleMin >= settings.stale), fr = rest.filter(e => e.staleMin < settings.stale);
   if (withPost.length){
     const pct = g => { const m = median(g.map(e => e.actualMin / e.posted)); return m === null ? null : Math.round(m * 100); };
-    const ps = pct(st), pf = pct(fr);
+    const ps = pct(st), pf = pct(fr), pr = pct(ro);
     v.hidden = false; v.textContent = '';
     const h = document.createElement('strong'); h.textContent = 'Your evidence so far'; v.append(h, document.createElement('br'));
     v.append('Stale postings (unchanged ' + settings.stale + '+ min): ' + (ps === null ? 'none timed yet' : 'your actual wait was typically ' + ps + '% of posted, across ' + st.length + ' ride' + (st.length === 1 ? '' : 's')) + '.');
     v.append(document.createElement('br'));
     v.append('Fresher postings: ' + (pf === null ? 'none timed yet' : 'typically ' + pf + '% of posted, across ' + fr.length + ' ride' + (fr.length === 1 ? '' : 's')) + '.');
+    v.append(document.createElement('br'));
+    v.append('Just reopened (within ' + settings.reopen + ' min): ' + (pr === null ? 'none timed yet' : 'typically ' + pr + '% of posted, across ' + ro.length + ' ride' + (ro.length === 1 ? '' : 's')) + '.');
     if (st.length + fr.length < 10){ v.append(document.createElement('br')); const s = document.createElement('span'); s.className = 'muted'; s.textContent = 'A handful of rides can mislead; aim for 10 or more in each group.'; v.append(s); }
   } else v.hidden = true;
 }
-const COLS = ['date','ride','posted_min','unchanged_min','unchanged_exact','actual_min','actual_sec','sign_lap_sec','sign_to_board_sec','preshow_laps','ride_went_down'];
+const COLS = ['date','ride','posted_min','unchanged_min','unchanged_exact','actual_min','actual_sec','sign_lap_sec','sign_to_board_sec','preshow_laps','ride_went_down','reopened_min'];
 function rowFor(e){
   const sign = (e.laps || []).find(l => l.label === SIGN_LAP);
   const sec = e.actualSec ?? e.actualMin * 60;
   const pre = (e.laps || []).filter(l => l.label !== SIGN_LAP).map(l => l.label + ' @' + Math.round(l.at / 1000) + 's').join('; ');
   return {id:String(e.start), date:new Date(e.start).toISOString(), ride:e.name, posted_min:e.posted ?? '', unchanged_min:e.staleMin,
     unchanged_exact:e.exact ? 'yes' : 'no', actual_min:e.actualMin, actual_sec:sec, sign_lap_sec:sign ? Math.round(sign.at / 1000) : '',
-    sign_to_board_sec:sign ? sec - Math.round(sign.at / 1000) : '', preshow_laps:pre, ride_went_down:e.flagged ? 'yes' : 'no'};
+    sign_to_board_sec:sign ? sec - Math.round(sign.at / 1000) : '', preshow_laps:pre, ride_went_down:e.flagged ? 'yes' : 'no',
+    reopened_min:typeof e.reopenMin === 'number' ? e.reopenMin : ''};
 }
 
 /* Google Sheet sync: each finished wait is sent once; the sheet skips ids it already has, so retries are safe. */
+let loggerMsg = '';
+function renderLogger(){
+  const s = $('logger-status'); if (!s) return;
+  const now = Date.now();
+  if (!loggerUrl()){ s.textContent = 'Not connected. “Unchanged for” times are measured only while the app is open.'; return; }
+  if (loggerMsg){ s.textContent = loggerMsg; return; }
+  if (!logger){ s.textContent = 'Connected. Waiting for the first reading.'; return; }
+  if (!loggerLive(now)){ s.textContent = 'Connected, but the logger last checked ' + fmtAge(now - logger.checkedAt) + '. Its timer may have stopped; open the script and run setup() again. Using the app’s own clock meanwhile.'; return; }
+  s.textContent = 'Connected. The logger last checked ' + fmtAge(now - logger.checkedAt) + ' and is tracking ' + Object.keys(logger.rides).length + ' rides.';
+}
 let syncing = false, syncMsg = '';
 function syncUrl(){ return (settings.syncUrl || '').trim(); }
 async function syncLog(){
@@ -560,9 +632,10 @@ function exportCsv(){
 /* shell */
 function render(){
   const now = Date.now();
-  if (rides.length) rides = rides.map(r => { const t = track[r.id]; if (!t) return r; const staleMin = Math.max(0, (now - t.since)/60000); return Object.assign({}, r, {staleMin, exact:t.exact, hunch: r.wait !== null && r.status === 'OPERATING' && r.wait >= settings.minWait && staleMin >= settings.stale}); });
-  $('status-line').textContent = lastError ? lastError : lastFetch ? 'Waits updated ' + fmtAge(now - lastFetch) + ' · ' + rides.filter(r => r.hunch).length + ' possible short lines' : 'Loading wait times…';
-  renderMap(); renderList(); renderLog();
+  if (rides.length) rides = rides.map(r => { const t = track[r.id]; return t ? Object.assign({}, r, flagsFor(r.status, r.wait, t, now)) : r; });
+  const nFlag = rides.filter(r => r.hunch || r.reopen).length;
+  $('status-line').textContent = lastError ? lastError : lastFetch ? 'Waits updated ' + fmtAge(now - lastFetch) + ' · ' + nFlag + ' possible short line' + (nFlag === 1 ? '' : 's') : 'Loading wait times…';
+  renderMap(); renderList(); renderLog(); renderLogger();
   if (!$('sheet').hidden && selectedId) { const keep = selectedId; const r = rides.find(x => x.id === keep); if (r) { $('s-stale').textContent = r.status === 'OPERATING' && r.wait !== null ? (r.exact ? '' : '≥ ') + fmtMin(r.staleMin) : '–'; } }
 }
 function show(view){
@@ -586,9 +659,23 @@ function init(){
   $('btn-clear').addEventListener('click', () => { $('clear-confirm').hidden = false; });
   $('clear-no').addEventListener('click', () => { $('clear-confirm').hidden = true; });
   $('clear-yes').addEventListener('click', () => { log = []; store.set('log', log); $('clear-confirm').hidden = true; syncMsg = ''; render(); renderSync(); });
-  const ss = $('set-stale'), sm = $('set-minwait'); ss.value = settings.stale; sm.value = settings.minWait;
-  const saveSet = () => { const a = parseInt(ss.value, 10), b = parseInt(sm.value, 10); if (a >= 5) settings.stale = a; if (b >= 0) settings.minWait = b; store.set('settings', settings); render(); };
-  ss.addEventListener('change', saveSet); sm.addEventListener('change', saveSet);
+  const ss = $('set-stale'), sm = $('set-minwait'), sr = $('set-reopen'); ss.value = settings.stale; sm.value = settings.minWait; sr.value = settings.reopen;
+  const saveSet = () => { const a = parseInt(ss.value, 10), b = parseInt(sm.value, 10), c = parseInt(sr.value, 10); if (a >= 5) settings.stale = a; if (b >= 0) settings.minWait = b; if (c >= 5) settings.reopen = c; store.set('settings', settings); render(); };
+  ss.addEventListener('change', saveSet); sm.addEventListener('change', saveSet); sr.addEventListener('change', saveSet);
+  const lu = $('logger-url'); lu.value = settings.loggerUrl || '';
+  $('logger-save').addEventListener('click', async () => {
+    const v = lu.value.trim();
+    if (v && !/^https:\/\/script\.google(usercontent)?\.com\//.test(v)){ loggerMsg = 'Paste the logger’s web app URL from Apps Script (it starts with https://script.google.com/).'; renderLogger(); return; }
+    if (v && v === syncUrl()){ loggerMsg = 'That’s the Google Sheet sync URL. The logger is its own Apps Script project with its own web app URL.'; renderLogger(); return; }
+    settings.loggerUrl = v; store.set('settings', settings); logger = null; store.set('logger', null);
+    if (!v){ loggerMsg = ''; renderLogger(); return; }
+    loggerMsg = 'Checking the link…'; renderLogger();
+    const ok = await fetchLogger();
+    if (!ok) loggerMsg = 'That link didn’t answer like the posted wait logger. Check that it’s the logger’s web app URL and that access is set to Anyone.';
+    renderLogger();
+    if (ok && liveData){ const now = Date.now(); updateTracking(liveData, now); rides = merge(liveData, now); render(); }
+  });
+  renderLogger();
   document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet(); });
   document.addEventListener('visibilitychange', () => { if (!document.hidden && Date.now() - lastFetch > 60000) refresh(); });
   setInterval(() => { if (!document.hidden){ refresh(); if (log.some(e => !e.synced)) syncLog(); } }, POLL_MS);

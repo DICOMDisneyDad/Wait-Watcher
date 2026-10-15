@@ -2,6 +2,7 @@
 
 Disneyland Park and Disney California Adventure posted wait times on a map, with how long each posted number has gone unchanged. Switch parks with the buttons under the title; the app remembers your choice.
 Rides whose wait hasn't moved for a while (30 minutes by default) and whose posted wait is at least 15 minutes get a gold star as a possible short line.
+Rides that reopened after being down in the last 20 minutes get a green arrow: people leave the line when a ride goes down, so the real line is often shorter than posted for a while.
 
 ## Put it online (GitHub Pages, about 5 minutes)
 
@@ -19,6 +20,8 @@ Any static host works (Netlify, Cloudflare Pages). It must be served over https 
 - The app records when each ride's standby number last changed. Its own clock is exact once it has been open for a few minutes.
 - Right after opening, it falls back to the feed's `lastUpdated` time. That time also moves when Lightning Lane return times change, so the app shows those figures as "at least".
 - If the app is closed for more than 12 minutes, it treats what it knew as uncertain and falls back to the feed time again.
+- With the posted wait logger connected (**My waits → Posted wait logger**), the app reads each ride's last change time and status history from the logger, which checks every 5 minutes whether or not the app is open. Times are then exact from the moment you open it, and "just reopened" works even for rides that came back while the app was closed. Setup is in `google-sheet/README.md`.
+- Without the logger, "just reopened" only appears for rides the app saw go from down to open while it was open.
 
 ## My waits
 
@@ -37,7 +40,7 @@ The summary compares your actual-to-posted ratio for stale versus fresh postings
 
 - `index.html`, `app.css`, `app.js`: the app
 - `map.svg`, `map-dca.svg`: the Disneyland and California Adventure maps, drawn from OpenStreetMap data
-- `google-sheet/`: the Apps Script for Google Sheet sync and its setup steps
+- `google-sheet/`: the Apps Scripts for Google Sheet sync (`Code.gs`) and the posted wait logger (`PostedWaitLogger.gs`), with setup steps
 - `sw.js`, `manifest.webmanifest`, `icon-*.png`: home-screen install and offline shell
 
 ## Editing
@@ -45,6 +48,6 @@ The summary compares your actual-to-posted ratio for stale versus fresh postings
 - Stop points and lap points live in `PROTOCOL` in `app.js`, matched by ride name. Untimed attractions are in `NOT_TIMED`.
 - Ride positions live in `RIDES_DL` and `RIDES_DCA` at the top of `app.js` as `[ThemeParks.wiki id, x, y, land]`. Coordinates match `map.svg` and `map-dca.svg` respectively. Each park's map file, land labels and starting view are in `PARKS`.
 - Rides the feed reports that aren't in that list still appear in the List view.
-- The flag thresholds can be changed in the app under **List → Flag settings**.
+- The flag thresholds, including how long the "just reopened" flag lasts, can be changed in the app under **List → Flag settings**.
 
 Wait data: ThemeParks.wiki. Map data © OpenStreetMap contributors. Not affiliated with Disney.
