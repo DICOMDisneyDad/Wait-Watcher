@@ -1,6 +1,6 @@
 # Wait Watcher
 
-Disneyland Park posted wait times on a map, with how long each posted number has gone unchanged.
+Disneyland Park and Disney California Adventure posted wait times on a map, with how long each posted number has gone unchanged. Switch parks with the buttons under the title; the app remembers your choice.
 Rides whose wait hasn't moved for a while (30 minutes by default) and whose posted wait is at least 15 minutes get a gold star as a possible short line.
 
 ## Put it online (GitHub Pages, about 5 minutes)
@@ -15,7 +15,7 @@ Any static host works (Netlify, Cloudflare Pages). It must be served over https 
 
 ## How it works
 
-- Every 2 minutes it reads live data for Disneyland Park from ThemeParks.wiki (`api.themeparks.wiki`), which relays Disney's own feed.
+- Every 2 minutes it reads live data for the whole Disneyland Resort from ThemeParks.wiki (`api.themeparks.wiki`), which relays Disney's own feed. One reading covers both parks, so the park you are not looking at keeps its staleness clock too.
 - The app records when each ride's standby number last changed. Its own clock is exact once it has been open for a few minutes.
 - Right after opening, it falls back to the feed's `lastUpdated` time. That time also moves when Lightning Lane return times change, so the app shows those figures as "at least".
 - If the app is closed for more than 12 minutes, it treats what it knew as uncertain and falls back to the feed time again.
@@ -26,7 +26,7 @@ Tap a ride to see its timing rules: start at the back of the standby line, stop 
 
 While timing, lap buttons record splits:
 - **Passed the posted wait sign** on every ride, for when the line spills outside the entrance.
-- Preshow laps on Haunted Mansion (stretching room), Rise of the Resistance (briefing room, shuttle), Smugglers Run (Hondo room) and Runaway Railway (preshow room).
+- Preshow laps on Haunted Mansion (stretching room), Rise of the Resistance (briefing room, shuttle), Smugglers Run (Hondo room), Runaway Railway (preshow room), WEB SLINGERS (preshow room) and Guardians of the Galaxy (Collector's office).
 
 Tap a recorded lap to undo it. Tick **Ride went down** to flag a run; flagged runs stay in the log but are left out of the summary. Showtime attractions and walk-throughs have no timer. The full rules are under **My waits → Stopwatch rules**.
 
@@ -36,14 +36,14 @@ The summary compares your actual-to-posted ratio for stale versus fresh postings
 ## Files
 
 - `index.html`, `app.css`, `app.js`: the app
-- `map.svg`: the park map, drawn from OpenStreetMap data
+- `map.svg`, `map-dca.svg`: the Disneyland and California Adventure maps, drawn from OpenStreetMap data
 - `google-sheet/`: the Apps Script for Google Sheet sync and its setup steps
 - `sw.js`, `manifest.webmanifest`, `icon-*.png`: home-screen install and offline shell
 
 ## Editing
 
 - Stop points and lap points live in `PROTOCOL` in `app.js`, matched by ride name. Untimed attractions are in `NOT_TIMED`.
-- Ride positions live in the `RIDES` list at the top of `app.js` as `[ThemeParks.wiki id, x, y, land]`. Coordinates match `map.svg`.
+- Ride positions live in `RIDES_DL` and `RIDES_DCA` at the top of `app.js` as `[ThemeParks.wiki id, x, y, land]`. Coordinates match `map.svg` and `map-dca.svg` respectively. Each park's map file, land labels and starting view are in `PARKS`.
 - Rides the feed reports that aren't in that list still appear in the List view.
 - The flag thresholds can be changed in the app under **List → Flag settings**.
 

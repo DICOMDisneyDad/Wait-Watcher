@@ -1,12 +1,13 @@
 'use strict';
-/* Wait Watcher: Disneyland posted waits on a map, plus how long each posted number has gone unchanged. */
-const PARK_ID = '7340550b-c14d-4def-80bb-acdb51d49a66';
-const API = 'https://api.themeparks.wiki/v1/entity/' + PARK_ID + '/live';
+/* Wait Watcher: Disneyland Resort posted waits on a map, plus how long each posted number has gone unchanged. */
+// One request covers the whole resort, so both parks' staleness clocks keep running whichever park is on screen.
+const RESORT_ID = 'bfc89fd6-314d-44b4-b89e-df1a89cf991e';
+const API = 'https://api.themeparks.wiki/v1/entity/' + RESORT_ID + '/live';
 const POLL_MS = 2 * 60 * 1000;
 const GAP_MS = 12 * 60 * 1000; // a longer gap between readings means we may have missed a change
 
 // ThemeParks.wiki id, map x, map y, land. Map coordinates match map.svg (viewBox 170 90 1300 1230).
-const RIDES = [
+const RIDES_DL = [
   ['0de1413a-73ee-46cf-af2e-c491cc7c7d3b',750,754,'Frontierland'],
   ['6c30d5b0-8c0a-406f-9258-0b6c55d4a5e4',716,829,'Frontierland'],
   ['c9e39189-7e99-4e0a-97e0-4a0d5654d257',700,850,'Frontierland'],
@@ -58,9 +59,54 @@ const RIDES = [
   ['05b17c11-fd4c-4b85-ab45-3e269dc56559',1029,1183,'Main Street, U.S.A.'],
   ['1b23667a-d8fb-436d-8952-c3e3f2e56d13',1040,1198,'Main Street, U.S.A.']
 ];
+const LANDS_DL = [["Main Street, U.S.A.",952,1120],["Fantasyland",985,520],["Toontown",1000,225],["Tomorrowland",1215,855],["Frontierland",700,790],["Adventureland",780,1060],["New Orleans Square",560,985],["Bayou Country",385,800],["Galaxy's Edge",520,420]];
+
+// California Adventure. Map coordinates match map-dca.svg (viewBox 170 110 1140 980), drawn from OpenStreetMap
+// with the same projection used to place each ride from ThemeParks.wiki's own location for it.
+// Rides that share one feed location (Hollywood Land's animation building, the two Pal-A-Round queues,
+// the two Guardians entries) are nudged apart so each pin can be tapped.
+const RIDES_DCA = [
+  ['77f205a4-d482-4d91-a5ff-71e54a086ad2',738,282,'Grizzly Peak'],
+  ['b1d285a7-2444-4a7c-b7bb-d2d4d6428a85',620,403,'Grizzly Peak'],
+  ['c9803366-6f37-4406-82af-7692357e3ca9',553,487,'Grizzly Peak'],
+  ['f44a5072-3cda-4c7c-8574-33ad09d16cca',362,593,'Paradise Gardens Park'],
+  ['e1fbc7a1-2cd1-4282-b373-ac11d9d9d38a',593,602,'Paradise Gardens Park'],
+  ['c8a4b7b1-c1b2-4dfe-b73c-4e834b4a73db',399,621,'Paradise Gardens Park'],
+  ['10a5fc6f-5ad3-414b-9bdd-e6bae097b6ad',433,638,'Paradise Gardens Park'],
+  ['4f5b28d0-b78e-482b-8e2e-1f90756d6220',349,705,'Paradise Gardens Park'],
+  ['4ca6cdbf-4c5f-45bf-b0dc-db83393ec208',403,794,'Pixar Pier'],
+  ['528016ef-db24-47fa-a0f2-b6d26d61e29f',435,806,'Pixar Pier'],
+  ['6d876f4c-c3ff-4ae3-a2d8-d4b831e1039b',371,780,'Pixar Pier'],
+  ['1d24dd7a-372b-4195-8ad0-ba9679d72b08',413,822,'Pixar Pier'],
+  ['5d07a2b1-49ca-4de7-9d32-6d08edf69b08',631,865,'Pixar Pier'],
+  ['388ad3f1-5cf5-4a9d-8d0e-6dfb817d7822',584,863,'Pixar Pier'],
+  ['86ab3069-110d-49c5-a7e7-29ddf28695a6',491,861,'Pixar Pier'],
+  ['eb77ee1f-3207-44fd-acfc-d7bc18602007',780,627,'San Fransokyo Square'],
+  ['c60c768b-3461-465c-8f4f-b44b087506fc',924,777,'Cars Land'],
+  ['46097afe-a1ea-4807-93d3-14d14f36e55f',839,604,'Cars Land'],
+  ['7a09a2f0-e226-4f3e-86f8-2598ab67ec44',934,718,'Cars Land'],
+  ['2295351d-ce6b-4c04-92d5-5b416372c5b5',971,539,'Avengers Campus'],
+  ['b7678dab-5544-48d5-8fdc-c1a0127cfbcd',1116,490,'Avengers Campus'],
+  ['2108cc58-80df-4fff-9b91-735e89873ffd',1116,518,'Avengers Campus'],
+  ['40524fba-5d84-49e7-9204-f493dbe2d5a4',1097,302,'Hollywood Land'],
+  ['8f586a2f-cef5-46d3-b822-fd622c4e9e33',1001,365,'Hollywood Land'],
+  ['d2aa0987-49a2-45dc-a635-3a8bf7401230',1047,393,'Hollywood Land'],
+  ['44c1f655-25d3-440c-b1a8-db736a12b105',1073,393,'Hollywood Land'],
+  ['7561bcd8-18ea-4e3f-89d5-c905b7ba3d42',1099,393,'Hollywood Land']
+];
+const LANDS_DCA = [["Buena Vista Street",884,300],["Hollywood Land",1070,345],["Avengers Campus",1135,570],["Cars Land",890,688],["San Fransokyo Square",735,668],["Pixar Pier",420,935],["Paradise Gardens Park",490,676],["Grizzly Peak",690,350]];
+
+// Map image bounds are [[-yMax, xMin], [-yMin, xMax]] of each SVG's viewBox (Leaflet's y grows upward).
+const PARKS = {
+  dl: {id:'7340550b-c14d-4def-80bb-acdb51d49a66', name:'Disneyland Park', short:'Disneyland', svg:'map.svg',
+       bounds:[[-1320,170],[-90,1470]], maxBounds:[[-1500,0],[90,1640]], center:[-720,900], fitH:1150, fit:[[-1260,260],[-160,1420]],
+       rides:RIDES_DL, lands:LANDS_DL},
+  dca:{id:'832fcd51-ea19-4e77-85c7-75d5843b127c', name:'Disney California Adventure', short:'California Adventure', svg:'map-dca.svg',
+       bounds:[[-1090,170],[-110,1310]], maxBounds:[[-1250,20],[50,1460]], center:[-600,750], fitH:1000, fit:[[-1040,280],[-170,1290]],
+       rides:RIDES_DCA, lands:LANDS_DCA}
+};
 const SKIP = new Set(['6e2af074-3a67-4f38-9bcf-2f5a572c87df']); // duplicate Opera House entry
-const LANDS = [["Main Street, U.S.A.",952,1120],["Fantasyland",985,520],["Toontown",1000,225],["Tomorrowland",1215,855],["Frontierland",700,790],["Adventureland",780,1060],["New Orleans Square",560,985],["Bayou Country",385,800],["Galaxy's Edge",520,420]];
-const POS = Object.fromEntries(RIDES.map(r => [r[0], {x:r[1], y:r[2], land:r[3]}]));
+const POS = Object.fromEntries([...RIDES_DL, ...RIDES_DCA].map(r => [r[0], {x:r[1], y:r[2], land:r[3]}]));
 
 /* Timing protocol (from the Disneyland Wait Timing Protocol doc). Matched by ride name.
    [name fragment, stop point, preshow lap points] */
@@ -101,14 +147,41 @@ const PROTOCOL = [
   ['submarine voyage', 'step through the submarine hatch'],
   ['autopia', 'step into the car'],
   ['astro orbitor', 'step into the rocket'],
-  ['monorail', 'step into the monorail']
+  ['monorail', 'step into the monorail'],
+  // California Adventure
+  ['soarin', 'step into your seat row'],
+  ['grizzly river', 'step into the raft'],
+  ['goofys sky school', 'step into the plane'],
+  ['little mermaid', 'step into the clamshell'],
+  ['jumpin jellyfish', 'step into the jellyfish seat'],
+  ['golden zephyr', 'step into the rocket'],
+  ['silly symphony', 'step into the swing seat'],
+  ['pal a round', 'step into the gondola'],
+  ['inside out', 'step into the ride vehicle'],
+  ['incredicoaster', 'step into the coaster car'],
+  ['critter carousel', 'step onto the carousel'],
+  ['midway mania', 'step into the tram'],
+  ['radiator springs', 'step into the racer'],
+  ['maters ', 'step into the tractor cart'],
+  ['luigis', 'step into the car'],
+  ['web slingers', 'step into the ride vehicle', ['Entering the preshow room']],
+  ['guardians', 'step into the gantry seat', ['Entering the Collector’s office']],
+  ['monsters inc', 'step into the taxi']
 ];
+const SHOWTIME = 'Runs on a showtime, so its wait depends on the next show, not a moving line.';
 const NOT_TIMED = [
-  ['tiki room', 'Runs on a showtime, so its wait depends on the next show, not a moving line.'],
-  ['mr lincoln', 'Runs on a showtime, so its wait depends on the next show, not a moving line.'],
-  ['philharmagic', 'Runs on a showtime, so its wait depends on the next show, not a moving line.'],
+  ['tiki room', SHOWTIME],
+  ['mr lincoln', SHOWTIME],
+  ['philharmagic', SHOWTIME],
+  ['animation academy', SHOWTIME],
+  ['turtle talk', SHOWTIME],
   ['treehouse', 'Walk-through with no line.'],
-  ['castle walkthrough', 'Walk-through with no line.']
+  ['castle walkthrough', 'Walk-through with no line.'],
+  ['sorcerers workshop', 'Walk-through with no line.'],
+  ['bakery tour', 'Walk-through with no line.'],
+  ['redwood creek', 'Walk-through play area with no line.'],
+  ['games of pixar pier', 'Midway games, not a ride line.'],
+  ['oogie boogie', 'Party walk-through, not a ride line.']
 ];
 const SIGN_LAP = 'Passed the posted wait sign';
 const norm = s => s.toLowerCase().replace(/[’'`]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
@@ -130,7 +203,10 @@ let track = store.get('track', {});      // id -> {wait, since, exact, seen}
 let settings = Object.assign({stale:30, minWait:15}, store.get('settings', {}));
 let timer = store.get('timer', null);
 let log = store.get('log', []);
-let rides = [];                            // current merged view
+let parkKey = PARKS[store.get('park', 'dl')] ? store.get('park', 'dl') : 'dl';
+const park = () => PARKS[parkKey];
+let rides = [];                            // current merged view, this park only
+let liveData = null;                       // last resort-wide reading, kept so switching parks needs no new fetch
 let lastFetch = 0, lastError = null, selectedId = null;
 
 const $ = id => document.getElementById(id);
@@ -158,8 +234,9 @@ function updateTracking(list, now){
   store.set('track', track);
 }
 function merge(list, now){
-  const out = [];
+  const out = [], pid = park().id;
   for (const e of list){
+    if (e.parkId !== pid) continue;
     if (e.entityType !== 'ATTRACTION' && !POS[e.id]) continue;
     if (SKIP.has(e.id)) continue;
     const p = POS[e.id] || null, t = track[e.id] || {since:now, exact:false};
@@ -179,33 +256,57 @@ async function refresh(manual){
     if (!r.ok) throw new Error('The wait time service answered ' + r.status + '.');
     const j = await r.json();
     const now = Date.now();
-    updateTracking(j.liveData || [], now);
-    rides = merge(j.liveData || [], now);
+    liveData = (j.liveData || []).filter(e => e.entityType === 'ATTRACTION' || POS[e.id]);
+    updateTracking(liveData, now);
+    rides = merge(liveData, now);
     lastFetch = now; lastError = null;
-    store.set('last', {at:now, data:j.liveData});
+    store.set('last', {at:now, data:liveData});
   }catch(err){
     lastError = navigator.onLine === false ? 'You are offline. Showing the last waits this phone saw.' : 'Could not reach the wait times right now. Showing the last waits this phone saw.';
-    if (!rides.length){ const c = store.get('last', null); if (c){ rides = merge(c.data, Date.now()); lastFetch = c.at; } }
+    if (!liveData){ const c = store.get('last', null); if (c && c.data){ liveData = c.data; rides = merge(liveData, Date.now()); lastFetch = c.at; } }
   }finally{
     btn.classList.remove('spin'); render();
   }
 }
 
 /* map */
-let map, markers = {};
+let map, markers = {}, base = null;
 function initMap(){
-  const b = [[-1320,170],[-90,1470]];
-  map = L.map('map', {crs:L.CRS.Simple, minZoom:-1.5, maxZoom:2, zoomSnap:0.25, attributionControl:false, maxBounds:[[-1500,0],[90,1640]], maxBoundsViscosity:0.8, zoomControl:false});
-  L.imageOverlay('map.svg', b).addTo(map);
-  const el = document.getElementById('map'), w = el.clientWidth || 390, h = el.clientHeight || 700;
-  if (h > w) map.setView([-720, 900], Math.log2(h / 1150)); else map.fitBounds([[-1260,260],[-160,1420]]);
+  map = L.map('map', {crs:L.CRS.Simple, minZoom:-1.5, maxZoom:2, zoomSnap:0.25, attributionControl:false, maxBoundsViscosity:0.8, zoomControl:false});
+  const el = document.getElementById('map');
   const zc = () => el.classList.toggle('z-low', map.getZoom() < -0.1);
-  map.on('zoomend', zc); zc();
+  map.on('zoomend', zc);
   L.control.zoom({position:'topright'}).addTo(map);
-  for (const l of LANDS){
-    L.marker([-l[2], l[1]], {interactive:false, keyboard:false, icon:L.divIcon({className:'pinwrap', html:'<span class="land-label">' + l[0] + '</span>', iconSize:[0,0]})}).addTo(map);
-  }
   map.on('click', () => closeSheet());
+  drawPark(); zc();
+}
+// Park image, land labels and starting view. Called again whenever the park switches.
+function drawPark(){
+  const p = park();
+  if (base) base.remove();
+  for (const id in markers) markers[id].remove();
+  markers = {};
+  base = L.layerGroup().addTo(map);
+  L.imageOverlay(p.svg, p.bounds, {alt:'Map of ' + p.name}).addTo(base);
+  for (const l of p.lands){
+    L.marker([-l[2], l[1]], {interactive:false, keyboard:false, icon:L.divIcon({className:'pinwrap', html:'<span class="land-label">' + l[0] + '</span>', iconSize:[0,0]})}).addTo(base);
+  }
+  map.setMaxBounds(p.maxBounds);
+  const el = document.getElementById('map'), w = el.clientWidth || 390, h = el.clientHeight || 700;
+  if (h > w) map.setView(p.center, Math.log2(h / p.fitH)); else map.fitBounds(p.fit);
+  el.setAttribute('aria-label', 'Map of ' + p.name + ' with wait times');
+}
+function setPark(key){
+  if (!PARKS[key] || key === parkKey) return;
+  closeSheet();
+  parkKey = key; store.set('park', key);
+  renderParkSwitch();
+  rides = liveData ? merge(liveData, Date.now()) : [];
+  if (map) drawPark();
+  render();
+}
+function renderParkSwitch(){
+  document.querySelectorAll('.park-btn').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.park === parkKey)));
 }
 const STAR = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l2.9 6 6.6.9-4.8 4.6 1.2 6.5L12 17.4l-5.9 3.1 1.2-6.5L2.5 9.4l6.6-.9z" fill="#1f2f44"/></svg>';
 function pinClass(r){
@@ -278,7 +379,7 @@ function openSheet(id, pan){
   const r = rides.find(x => x.id === id); if (!r) return;
   selectedId = id;
   $('s-name').textContent = r.name;
-  $('s-land').textContent = (r.land || 'Disneyland Park') + ' · ' + statusText(r.status);
+  $('s-land').textContent = (r.land || park().name) + ' · ' + statusText(r.status);
   $('s-wait').textContent = r.status === 'OPERATING' && r.wait !== null ? r.wait + ' min' : '–';
   $('s-stale').textContent = r.status === 'OPERATING' && r.wait !== null ? (r.exact ? '' : '≥ ') + fmtMin(r.staleMin) : '–';
   const note = $('s-note');
@@ -471,6 +572,8 @@ function show(view){
   if (view === 'map' && map) setTimeout(() => map.invalidateSize(), 0);
 }
 function init(){
+  renderParkSwitch();
+  document.querySelectorAll('.park-btn').forEach(b => b.addEventListener('click', () => setPark(b.dataset.park)));
   initMap();
   document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => show(t.dataset.view)));
   $('btn-refresh').addEventListener('click', () => refresh(true));

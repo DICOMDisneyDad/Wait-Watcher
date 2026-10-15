@@ -1,7 +1,7 @@
 {
   "name": "Wait Watcher",
   "short_name": "Wait Watcher",
-  "description": "Disneyland wait times on a map, with how long each posted wait has gone unchanged.",
+  "description": "Disneyland and California Adventure wait times on a map, with how long each posted wait has gone unchanged.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

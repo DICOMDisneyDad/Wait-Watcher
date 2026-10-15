@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Wait Watcher</title>
-<meta name="description" content="Disneyland wait times on a map, with how long each posted wait has gone unchanged.">
+<meta name="description" content="Disneyland and California Adventure wait times on a map, with how long each posted wait has gone unchanged.">
 <meta name="theme-color" content="#1f2f44">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -24,10 +24,14 @@
       <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </button>
   </header>
+  <div class="parkbar" role="group" aria-label="Park">
+    <button type="button" class="park-btn" data-park="dl" aria-pressed="true">Disneyland</button>
+    <button type="button" class="park-btn" data-park="dca" aria-pressed="false">California Adventure</button>
+  </div>
 
   <main>
     <section id="view-map" class="view">
-      <div id="map" aria-label="Map of Disneyland Park with wait times"></div>
+      <div id="map" aria-label="Park map with wait times"></div>
       <div class="legend" aria-hidden="true">
         <span><i class="sw fresh"></i>Recently changed</span>
         <span><i class="sw stale"></i>Unchanged a while</span>
@@ -96,7 +100,7 @@
       </details>
       <details class="about">
         <summary>How the staleness clock works</summary>
-        <p>Every two minutes the app reads Disneyland's posted waits through ThemeParks.wiki and notes when each ride's posted number last changed.</p>
+        <p>Every two minutes the app reads posted waits for both Disneyland and California Adventure through ThemeParks.wiki and notes when each ride's posted number last changed. Both parks are tracked whichever one is on screen, so switching parks doesn't reset the clock.</p>
         <p>While the app has been open for a while, “unchanged” is measured directly. Right after you open it, the app falls back to the feed's own update time, which moves whenever anything about the ride changes, so those figures are a minimum and show as “at least”.</p>
         <p>A stale posted wait is a hunch, not a promise. Timing your own waits here builds the evidence either way.</p>
       </details>
@@ -107,11 +111,11 @@
           <li><strong>Start</strong> the moment you take your place at the back of the standby line. If the line is inside the entrance, that is the standby entrance by the posted wait sign. If it spills outside, it is the back of that extended line.</li>
           <li><strong>Lap at the sign:</strong> if you started outside the entrance, tap “Passed the posted wait sign” as you pass it. That gives both the true wait and the red-card-style wait.</li>
           <li><strong>Stop</strong> the moment you step into the ride vehicle, boat, or cabin. Not when you reach the load area, and not when the ride starts moving.</li>
-          <li><strong>Preshows count.</strong> Keep the clock running and tap the preshow lap buttons (Haunted Mansion, Rise of the Resistance, Smugglers Run, Runaway Railway) so preshow time can be separated later.</li>
+          <li><strong>Preshows count.</strong> Keep the clock running and tap the preshow lap buttons (Haunted Mansion, Rise of the Resistance, Smugglers Run, Runaway Railway, WEB SLINGERS, Guardians of the Galaxy) so preshow time can be separated later.</li>
           <li><strong>Logged automatically at start:</strong> the posted wait, the time of day, and how long that posted wait had gone unchanged.</li>
           <li><strong>Don't use the run</strong> if you used Lightning Lane, single rider, or rider swap. If the ride breaks down while you're in line, keep timing and tick the “ride went down” box.</li>
         </ol>
-        <p>Not timed: showtime attractions (Enchanted Tiki Room, Great Moments with Mr. Lincoln, Mickey's PhilharMagic) and walk-throughs with no line. Riverboat and Columbia waits follow departure times, so expect jumpy numbers. Each ride's own stop point shows when you tap it on the map.</p>
+        <p>Not timed: showtime attractions (Enchanted Tiki Room, Great Moments with Mr. Lincoln, Mickey's PhilharMagic, Turtle Talk with Crush, Animation Academy), walk-throughs with no line (including Sorcerer's Workshop, The Bakery Tour and Redwood Creek Challenge Trail) and the Games of Pixar Pier. Riverboat and Columbia waits follow departure times, so expect jumpy numbers. Each ride's own stop point shows when you tap it on the map.</p>
         <p class="muted">Wait data from <a href="https://themeparks.wiki">ThemeParks.wiki</a>. Map data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>. Not affiliated with Disney.</p>
       </details>
     </section>

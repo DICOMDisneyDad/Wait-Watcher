@@ -20,6 +20,10 @@ button{font:inherit}
 :focus-visible{outline:3px solid var(--focus);outline-offset:2px}
 .top{display:flex;align-items:center;justify-content:space-between;gap:12px;background:var(--ink);color:var(--ink-fg);padding:calc(10px + env(safe-area-inset-top,0px)) 16px 10px}
 .brand h1{margin:0;font-family:var(--font-display);font-weight:700;font-size:22px;color:var(--gold);line-height:1.1}
+.parkbar{display:flex;gap:6px;background:var(--ink);padding:0 16px 10px}
+.park-btn{flex:1;min-height:40px;font:inherit;font-family:var(--font-display);font-weight:600;font-size:15px;border-radius:999px;border:1.5px solid rgba(255,214,90,.55);background:transparent;color:#dbe6f2;cursor:pointer;padding:6px 10px}
+.park-btn[aria-pressed="true"]{background:var(--gold);color:#1f2f44;border-color:var(--gold)}
+.park-btn:focus-visible{outline:3px solid var(--focus);outline-offset:2px}
 .brand p{margin:2px 0 0;font-size:13px;color:#d4dfec;font-variant-numeric:tabular-nums}
 .btn{font-family:var(--font-display);font-weight:600;font-size:15px;min-height:44px;padding:8px 14px;border-radius:12px;border:1.5px solid var(--line);background:var(--surface);color:var(--fg);cursor:pointer}
 .btn.icon{width:44px;padding:0;display:grid;place-items:center;background:transparent;color:var(--ink-fg);border-color:#4b5e78}
