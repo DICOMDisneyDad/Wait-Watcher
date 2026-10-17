@@ -1,5 +1,5 @@
 // Caches the app shell so it opens with weak park Wi-Fi. Wait times always come from the network.
-const CACHE = 'wait-watcher-v5';
+const CACHE = 'wait-watcher-v6';
 const SHELL = ['./', 'index.html', 'app.css', 'app.js', 'map.svg', 'map-dca.svg', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png',
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css', 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });

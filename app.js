@@ -242,6 +242,16 @@ function updateTracking(list, now){
    so it knows when each posted wait last changed even while this app was closed. */
 const LOGGER_MAX_AGE = 15 * 60 * 1000; // a logger that hasn't checked in this long is ignored
 const SAME_CHANGE = 6 * 60 * 1000;     // app and logger times this close describe the same change
+// "Likely to drop": the logger counts four signs at each change (high for today, today's peak,
+// just jumped 10+, after 8 PM). In past logs 3+ signs were followed by a drop about 3 times in 4.
+const DROP_MIN = 3;
+const DROP_WHY = {high:'well above today’s average', peak:'today’s highest', jump:'just jumped 10+ min', late:'posted after 8 PM'};
+function dropFor(id, status, wait, now){
+  if (!loggerLive(now) || status !== 'OPERATING' || wait === null || wait < settings.minWait) return null;
+  const L = logger.rides[id];
+  if (!L || !L.drop || L.eventNight || L.wait !== wait) return null; // only while the logger describes this same posting
+  return L.drop.signals >= DROP_MIN ? L.drop : null;
+}
 function loggerUrl(){ return (settings.loggerUrl || '').trim(); }
 function loggerLive(now){ return !!(loggerUrl() && logger && logger.rides && now - logger.checkedAt <= LOGGER_MAX_AGE); }
 function applyLogger(list, now){
@@ -292,7 +302,7 @@ function merge(list, now){
     const wait = e.status === 'OPERATING' ? standby(e) : null;
     const single = e.queue && e.queue.SINGLE_RIDER && typeof e.queue.SINGLE_RIDER.waitTime === 'number' ? e.queue.SINGLE_RIDER.waitTime : null;
     const ll = e.queue && (e.queue.RETURN_TIME || e.queue.PAID_RETURN_TIME);
-    out.push(Object.assign({id:e.id, name:clean(e.name), status:e.status, wait, single, ll, pos:p, land:p ? p.land : ''}, flagsFor(e.status, wait, t, now)));
+    out.push(Object.assign({id:e.id, name:clean(e.name), status:e.status, wait, single, ll, pos:p, land:p ? p.land : ''}, flagsFor(e.status, wait, t, now), {drop:dropFor(e.id, e.status, wait, now)}));
   }
   return out;
 }
@@ -358,6 +368,7 @@ function renderParkSwitch(){
   document.querySelectorAll('.park-btn').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.park === parkKey)));
 }
 const REOPEN = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12a7 7 0 1 0 2.05-4.95M5 4v4h4" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const DOWN = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v15M6 13l6 6 6-6" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const STAR = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l2.9 6 6.6.9-4.8 4.6 1.2 6.5L12 17.4l-5.9 3.1 1.2-6.5L2.5 9.4l6.6-.9z" fill="#1f2f44"/></svg>';
 function pinClass(r){
   if (r.status !== 'OPERATING') return 'closed';
@@ -372,13 +383,14 @@ function pinHtml(r){
   if (r.status !== 'OPERATING') t = r.status === 'REFURBISHMENT' ? 'Refurb' : r.status === 'DOWN' ? 'Down' : 'Closed';
   else if (r.reopen) t = REOPEN + (r.wait !== null ? r.wait : '');
   else if (r.wait !== null) t = (r.hunch ? STAR : '') + r.wait;
+  if (r.drop && r.status === 'OPERATING' && r.wait !== null) t += '<span class="drop-badge">' + DOWN + '</span>';
   return '<button type="button" class="pin ' + c + '" aria-label="' + r.name.replace(/"/g,'&quot;') + ': ' + describe(r) + '">' + t + '</button>';
 }
 function describe(r){
   if (r.status !== 'OPERATING') return statusText(r.status);
   if (r.reopen) return 'just reopened ' + fmtAge(r.reopenMin * 60000) + (r.wait !== null ? ', ' + r.wait + ' minute posted wait' : '');
   if (r.wait === null) return 'open, no posted wait';
-  return r.wait + ' minute wait, unchanged for ' + (r.exact ? '' : 'at least ') + fmtMin(r.staleMin);
+  return r.wait + ' minute wait, unchanged for ' + (r.exact ? '' : 'at least ') + fmtMin(r.staleMin) + (r.drop ? ', likely to drop' : '');
 }
 function statusText(s){ return {CLOSED:'Closed', DOWN:'Temporarily down', REFURBISHMENT:'Closed for refurbishment', OPERATING:'Open'}[s] || s; }
 function renderMap(){
@@ -386,7 +398,7 @@ function renderMap(){
   const seen = new Set();
   for (const r of rides){
     if (!r.pos) continue; seen.add(r.id);
-    const z = r.reopen ? 1100 : r.hunch ? 1000 : r.status === 'OPERATING' && r.wait !== null ? 500 : 0;
+    const z = r.reopen ? 1100 : r.hunch ? 1000 : r.drop ? 900 : r.status === 'OPERATING' && r.wait !== null ? 500 : 0;
     const icon = L.divIcon({className:'pinwrap', html:pinHtml(r), iconSize:[0,0]});
     if (markers[r.id]){ markers[r.id].setIcon(icon); markers[r.id].setZIndexOffset(z); }
     else {
@@ -396,30 +408,32 @@ function renderMap(){
     }
   }
   for (const id in markers){ if (!seen.has(id)){ markers[id].remove(); delete markers[id]; } }
-  // Flag chips: just-reopened rides first (they're time-sensitive), then stale postings.
+  // Flag chips: just-reopened rides first (they're time-sensitive), then stale postings, then likely drops.
   const hs = rides.filter(r => r.reopen).sort((a,b) => a.reopenMin - b.reopenMin)
-    .concat(rides.filter(r => r.hunch).sort((a,b) => b.staleMin - a.staleMin));
+    .concat(rides.filter(r => r.hunch).sort((a,b) => b.staleMin - a.staleMin))
+    .concat(rides.filter(r => r.drop && !r.reopen && !r.hunch).sort((a,b) => b.drop.signals - a.drop.signals || b.wait - a.wait));
   const bar = $('hunch-bar'); bar.textContent = ''; bar.hidden = !hs.length || !$('sheet').hidden;
   for (const r of hs.slice(0,6)){
-    const b = document.createElement('button'); b.type = 'button'; b.className = 'hunch-chip' + (r.reopen ? ' reopen' : '');
-    b.innerHTML = (r.reopen ? REOPEN : STAR).replace('aria-hidden','width="14" height="14" aria-hidden');
+    const kind = r.reopen ? 'reopen' : r.hunch ? 'hunch' : 'drop';
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'hunch-chip' + (kind === 'hunch' ? '' : ' ' + kind);
+    b.innerHTML = (kind === 'reopen' ? REOPEN : kind === 'hunch' ? STAR : DOWN).replace('aria-hidden','width="14" height="14" aria-hidden');
     b.append(r.name + (r.wait !== null ? ' ' + r.wait + ' min' : ''));
-    const s = document.createElement('small'); s.textContent = r.reopen ? 'reopened ' + fmtAge(r.reopenMin * 60000) : 'still for ' + fmtMin(r.staleMin); b.append(s);
+    const s = document.createElement('small'); s.textContent = kind === 'reopen' ? 'reopened ' + fmtAge(r.reopenMin * 60000) : kind === 'hunch' ? 'still for ' + fmtMin(r.staleMin) : 'likely to drop'; b.append(s);
     b.addEventListener('click', () => openSheet(r.id, true)); bar.append(b);
   }
 }
 
 /* list */
-function rank(r){ if (r.reopen) return -1; if (r.hunch) return 0; if (r.status === 'OPERATING' && r.wait !== null) return 1; if (r.status === 'OPERATING') return 2; return 3; }
+function rank(r){ if (r.reopen) return -1; if (r.hunch) return 0; if (r.drop) return 0.5; if (r.status === 'OPERATING' && r.wait !== null) return 1; if (r.status === 'OPERATING') return 2; return 3; }
 function renderList(){
   const ol = $('ride-list'); ol.textContent = '';
   const sorted = rides.slice().sort((a,b) => rank(a) - rank(b) || (a.reopen ? a.reopenMin - b.reopenMin : b.staleMin - a.staleMin));
   for (const r of sorted){
     const li = document.createElement('li');
-    const b = document.createElement('button'); b.type = 'button'; b.className = 'ride' + (r.reopen ? ' reopen' : r.hunch ? ' hunch' : '');
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'ride' + (r.reopen ? ' reopen' : r.hunch ? ' hunch' : r.drop ? ' drop' : '');
     const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = r.name;
     const ld = document.createElement('span'); ld.className = 'ld';
-    ld.textContent = (r.land ? r.land + ' · ' : '') + (r.status !== 'OPERATING' ? statusText(r.status) : r.reopen ? 'Just reopened ' + fmtAge(r.reopenMin * 60000) : r.wait === null ? 'Open, no posted wait' : (r.hunch ? 'Possible short line · ' : '') + 'unchanged ' + (r.exact ? '' : '≥ ') + fmtMin(r.staleMin));
+    ld.textContent = (r.land ? r.land + ' · ' : '') + (r.status !== 'OPERATING' ? statusText(r.status) : r.reopen ? 'Just reopened ' + fmtAge(r.reopenMin * 60000) : r.wait === null ? 'Open, no posted wait' : (r.hunch ? 'Possible short line · ' : '') + (r.drop ? 'Likely to drop · ' : '') + 'unchanged ' + (r.exact ? '' : '≥ ') + fmtMin(r.staleMin));
     const w = document.createElement('span'); w.className = 'w';
     w.textContent = r.status === 'OPERATING' && r.wait !== null ? r.wait : '–';
     const sm = document.createElement('small'); sm.textContent = r.status === 'OPERATING' && r.wait !== null ? 'min posted' : ''; w.append(sm);
@@ -447,6 +461,12 @@ function openSheet(id, pan){
   if (r.single !== null) extra.push('Single rider: ' + r.single + ' min');
   if (r.ll && r.ll.state) extra.push('Lightning Lane: ' + (r.ll.state === 'AVAILABLE' && r.ll.returnStart ? 'returns from ' + new Date(r.ll.returnStart).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'}) : r.ll.state === 'FINISHED' ? 'sold out' : r.ll.state.toLowerCase().replace('_',' ')));
   $('s-extra').textContent = extra.join(' · ');
+  const dn = $('s-drop');
+  if (r.drop){
+    const why = r.drop.why.map(k => k === 'high' ? 'well above today’s average of ' + r.drop.todayAvg + ' min' : DROP_WHY[k] || k);
+    dn.textContent = 'Likely to drop: ' + r.drop.signals + ' of 4 signs (' + why.join(', ') + '). In past logs, the next posted change after a spike like this was a drop about 3 times in 4, usually by 5 to 10 minutes.';
+    dn.hidden = false;
+  } else dn.hidden = true;
   const pr = protocolFor(r.name), how = $('s-howto'); how.textContent = '';
   if (pr.untimed){
     how.append(howLine('Not timed', pr.why));
@@ -468,7 +488,7 @@ function closeSheet(){ if ($('sheet').hidden) return; $('sheet').hidden = true; 
 /* timer and log */
 function startTimer(){
   const r = rides.find(x => x.id === selectedId); if (!r || timer) return;
-  timer = {id:r.id, name:r.name, posted:r.wait, staleMin:Math.round(r.staleMin), exact:r.exact, reopenMin:r.reopenMin === null ? null : Math.round(r.reopenMin), start:Date.now(), laps:[], flagged:false};
+  timer = {id:r.id, name:r.name, posted:r.wait, staleMin:Math.round(r.staleMin), exact:r.exact, reopenMin:r.reopenMin === null ? null : Math.round(r.reopenMin), dropSignals:r.drop ? r.drop.signals : null, start:Date.now(), laps:[], flagged:false};
   store.set('timer', timer); closeSheet(); show('log'); render();
 }
 function stopTimer(keep){
@@ -632,9 +652,9 @@ function exportCsv(){
 /* shell */
 function render(){
   const now = Date.now();
-  if (rides.length) rides = rides.map(r => { const t = track[r.id]; return t ? Object.assign({}, r, flagsFor(r.status, r.wait, t, now)) : r; });
-  const nFlag = rides.filter(r => r.hunch || r.reopen).length;
-  $('status-line').textContent = lastError ? lastError : lastFetch ? 'Waits updated ' + fmtAge(now - lastFetch) + ' · ' + nFlag + ' possible short line' + (nFlag === 1 ? '' : 's') : 'Loading wait times…';
+  if (rides.length) rides = rides.map(r => { const t = track[r.id]; return t ? Object.assign({}, r, flagsFor(r.status, r.wait, t, now), {drop:dropFor(r.id, r.status, r.wait, now)}) : r; });
+  const nFlag = rides.filter(r => r.hunch || r.reopen).length, nDrop = rides.filter(r => r.drop).length;
+  $('status-line').textContent = lastError ? lastError : lastFetch ? 'Waits updated ' + fmtAge(now - lastFetch) + ' · ' + nFlag + ' possible short line' + (nFlag === 1 ? '' : 's') + (nDrop ? ' · ' + nDrop + ' likely to drop' : '') : 'Loading wait times…';
   renderMap(); renderList(); renderLog(); renderLogger();
   if (!$('sheet').hidden && selectedId) { const keep = selectedId; const r = rides.find(x => x.id === keep); if (r) { $('s-stale').textContent = r.status === 'OPERATING' && r.wait !== null ? (r.exact ? '' : '≥ ') + fmtMin(r.staleMin) : '–'; } }
 }

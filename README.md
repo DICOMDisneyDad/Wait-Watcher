@@ -3,6 +3,7 @@
 Disneyland Park and Disney California Adventure posted wait times on a map, with how long each posted number has gone unchanged. Switch parks with the buttons under the title; the app remembers your choice.
 Rides whose wait hasn't moved for a while (30 minutes by default) and whose posted wait is at least 15 minutes get a gold star as a possible short line.
 Rides that reopened after being down in the last 20 minutes get a green arrow: people leave the line when a ride goes down, so the real line is often shorter than posted for a while.
+Rides whose posted wait is likely to drop at its next update get a small blue down arrow on their pin (needs the posted wait logger). The logger counts four signs at each change: well above that ride's average so far today (20%+), the ride's highest so far today, a jump of 10+ minutes, or posted after 8 PM. Three or more signs earn the arrow; in the first week of logs those were followed by a drop about 3 times in 4. It's off during California Adventure's October after-hours event nights.
 
 ## Put it online (GitHub Pages, about 5 minutes)
 

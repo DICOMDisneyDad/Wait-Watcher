@@ -37,6 +37,7 @@
         <span><i class="sw stale"></i>Unchanged a while</span>
         <span><i class="sw hunch"></i>Unchanged a long time</span>
         <span><i class="sw reopen"></i>Just reopened</span>
+        <span><i class="sw drop"></i>Likely to drop</span>
       </div>
       <div class="hunch-bar" id="hunch-bar" hidden></div>
     </section>
@@ -116,6 +117,7 @@
         <p>While the app has been open for a while, “unchanged” is measured directly. Right after you open it, the app falls back to the feed's own update time, which moves whenever anything about the ride changes, so those figures are a minimum and show as “at least”.</p>
         <p>With the posted wait logger connected, the app reads when each number last changed from the logger, which checks every 5 minutes whether or not the app is open. Those times are exact (to within about 5 minutes) right away.</p>
         <p>A green arrow marks a ride that reopened after being down. People leave the line when a ride goes down, so for a short while after it reopens the real line is often shorter than the posted wait. That flag lasts 20 minutes by default (List → Flag settings).</p>
+        <p>A blue down arrow on a pin means the posted wait is likely to drop at its next update. It needs the posted wait logger, which tallies each ride's posted waits through the day and counts four signs: the wait is well above that ride's average so far today, it's the ride's highest so far today, it just jumped 10 or more minutes, or it was posted after 8 PM. Rides with 3 or more signs get the arrow. In the first week of logs, the next posted change after that was a drop about 3 times in 4, usually by 5 to 10 minutes. It predicts the posted number, not your actual wait, and it's switched off during California Adventure's after-hours event nights.</p>
         <p>A stale posted wait is a hunch, not a promise. Timing your own waits here builds the evidence either way.</p>
       </details>
       <details class="about" id="protocol">
@@ -144,6 +146,7 @@
       <div><span class="k">Unchanged for</span><span class="v" id="s-stale"></span></div>
     </div>
     <p id="s-note" class="note"></p>
+    <p id="s-drop" class="note drop" hidden></p>
     <p id="s-extra" class="muted"></p>
     <div class="howto" id="s-howto"></div>
     <button class="btn primary wide" id="s-timer" type="button">Start wait timer</button>
