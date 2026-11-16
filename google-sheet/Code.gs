@@ -7,9 +7,11 @@
  * so the app can safely retry after a dropped connection.
  */
 const SHEET_NAME = 'Timed Waits'; // its own tab, separate from the Posted Waits logger
-// reopened_min was added later, so it sits after synced_at; sheet_() adds the header to older sheets.
+// Columns added later sit after synced_at, in the order they were added; sheet_() adds their headers to older sheets.
+// ride_id is the ThemeParks.wiki id, the same one the Posted Waits tab uses, so rides match even when names differ.
 const HEADERS = ['id','date','ride','posted_min','unchanged_min','unchanged_exact','actual_min','actual_sec',
-  'sign_lap_sec','sign_to_board_sec','preshow_laps','ride_went_down','synced_at','reopened_min'];
+  'sign_lap_sec','sign_to_board_sec','preshow_laps','ride_went_down','synced_at','reopened_min',
+  'ride_id','prev_posted_min','posted_trend','drop_signals','mins_after_opening'];
 
 function sheet_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -49,7 +51,8 @@ function doPost(e) {
       have.add(id);
       add.push([id, r.date ? new Date(r.date) : '', r.ride || '', num_(r.posted_min), num_(r.unchanged_min), r.unchanged_exact || '',
         num_(r.actual_min), num_(r.actual_sec), num_(r.sign_lap_sec), num_(r.sign_to_board_sec), r.preshow_laps || '',
-        r.ride_went_down || '', now, num_(r.reopened_min)]);
+        r.ride_went_down || '', now, num_(r.reopened_min),
+        r.ride_id || '', num_(r.prev_posted_min), r.posted_trend || '', num_(r.drop_signals), num_(r.mins_after_opening)]);
     }
     if (add.length) sh.getRange(sh.getLastRow() + 1, 1, add.length, HEADERS.length).setValues(add);
     return json_({ok: true, ids: ids, added: add.length});
