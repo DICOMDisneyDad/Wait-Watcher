@@ -4,6 +4,8 @@ Disneyland Park and Disney California Adventure posted wait times on a map, with
 Rides whose wait hasn't moved for a while (30 minutes by default) and whose posted wait is at least 15 minutes get a gold star as a possible short line.
 Rides that reopened after being down in the last 20 minutes get a green arrow: people leave the line when a ride goes down, so the real line is often shorter than posted for a while.
 Rides whose posted wait is likely to drop at its next update get a small blue down arrow on their pin (needs the posted wait logger). The logger counts four signs at each change: well above that ride's average so far today (20%+), the ride's highest so far today, a jump of 10+ minutes, or posted after 8 PM. Three or more signs earn the arrow; in the first week of logs those were followed by a drop about 3 times in 4. It's off during California Adventure's October after-hours event nights.
+Each ride also gets an outlook, based on the owner's own timed waits through Nov 14, 2026. **Good bet** (teal up arrow): the posted wait just went up, and waits joined right after a jump came in shorter than posted 8 times in 9. **Posted or longer**: the posted wait just dropped; only 2 in 6 of those came in shorter. **Expect longer**: the first hour after the park opens (from ThemeParks.wiki's schedule), when timed waits ran about 1.5 times posted.
+On preshow rides the posted wait counts only to the first preshow room, so each of those rides' cards says roughly how much longer it takes from there to board, and the summary compares them up to the preshow room.
 
 ## Put it online (GitHub Pages, about 5 minutes)
 
@@ -34,8 +36,8 @@ While timing, lap buttons record splits:
 
 Tap a recorded lap to undo it. Tick **Ride went down** to flag a run; flagged runs stay in the log but are left out of the summary. Showtime attractions and walk-throughs have no timer. The full rules are under **My waits → Stopwatch rules**.
 
-Each timed wait stores the posted wait, how stale it was, your actual wait, and any laps.
-The summary compares your actual-to-posted ratio for stale versus fresh postings. **Export CSV** downloads the log. The log is kept on your phone (browser storage). To also send each wait to a Google Sheet, follow `google-sheet/README.md`, then paste the web app URL under **My waits → Google Sheet sync**.
+Each timed wait stores the ride's ThemeParks.wiki id, the posted wait, how stale it was, the posted wait before it (so whether it had just gone up or down), any likely-to-drop signs, minutes since the park opened, your actual wait, and any laps.
+The summary compares your actual-to-posted ratio for postings that just went up, just went down, the first hour, stale and fresh postings, and just-reopened rides, with a count toward 15 timings each for "went up" and "went down". After 3 or more timings of a ride, its card shows how that ride usually compares with posted. **Export CSV** downloads the log. The log is kept on your phone (browser storage). To also send each wait to a Google Sheet, follow `google-sheet/README.md`, then paste the web app URL under **My waits → Google Sheet sync**.
 
 ## Files
 

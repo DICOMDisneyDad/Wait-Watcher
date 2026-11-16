@@ -199,9 +199,10 @@ const store = {
   get(k, d){ try{ const v = localStorage.getItem('ww-' + k); return v ? JSON.parse(v) : d; }catch(e){ return d; } },
   set(k, v){ try{ localStorage.setItem('ww-' + k, JSON.stringify(v)); }catch(e){} }
 };
-let track = store.get('track', {});      // id -> {wait, since, exact, seen, status, statusSince, prevStatus}
+let track = store.get('track', {});      // id -> {wait, since, exact, seen, status, statusSince, prevStatus, prevWait}
 let settings = Object.assign({stale:30, minWait:15, reopen:20}, store.get('settings', {}));
 let logger = store.get('logger', null);   // last reading from the posted wait logger: {at, checkedAt, rides}
+let opening = store.get('opening', {});    // park id -> {day, at}: today's opening time, for the first-hour outlook
 let timer = store.get('timer', null);
 let log = store.get('log', []);
 let parkKey = PARKS[store.get('park', 'dl')] ? store.get('park', 'dl') : 'dl';
@@ -226,7 +227,9 @@ function updateTracking(list, now){
     const gap = now - t.seen > GAP_MS;
     if (t.wait !== w){
       // Value changed. If we were watching closely, it changed within the last poll; otherwise we only know the feed's time.
-      Object.assign(t, gap ? {wait:w, since:Math.min(feedT, now), exact:false} : {wait:w, since:now, exact:true});
+      // Remember the posting before this one (only if we saw it ourselves), so we know whether it went up or down.
+      const prevWait = !gap && typeof t.wait === 'number' ? t.wait : null;
+      Object.assign(t, gap ? {wait:w, since:Math.min(feedT, now), exact:false} : {wait:w, since:now, exact:true}, {prevWait});
     } else if (gap && feedT > t.since){ t.since = feedT; t.exact = false; } // something changed while we were away
     if (t.status !== e.status){
       // Status changed. While watching we know when and from what; after a gap we don't, so no "just reopened" guess.
@@ -252,6 +255,88 @@ function dropFor(id, status, wait, now){
   if (!L || !L.drop || L.eventNight || L.wait !== wait) return null; // only while the logger describes this same posting
   return L.drop.signals >= DROP_MIN ? L.drop : null;
 }
+
+/* Outlook: what your own timed waits say about joining the line right now (timings through Nov 14, 2026).
+   Posted wait had just gone UP: shorter than posted 8 times in 9, typically 86% of posted.
+   Posted wait had just gone DOWN: shorter only 2 times in 6, typically 111% of posted.
+   First hour after opening: typically about 1.5 times posted; the posted number almost always climbs within 90 minutes. */
+const MORNING_MS = 60 * 60 * 1000;
+const EVIDENCE_GOAL = 15; // timings wanted in each of the "went up" and "went down" groups
+// Timings in the sheet from before the app saved the posted trend, so the evidence count starts from them.
+const BASELINE = {up:{n:9, pct:86}, down:{n:6, pct:111}, morning:{n:5, pct:156}};
+const laDay = ms => new Date(ms).toLocaleDateString('en-CA', {timeZone:'America/Los_Angeles'});
+function openingFor(parkId, now){ const o = opening[parkId]; return o && o.day === laDay(now) && typeof o.at === 'number' ? o.at : null; }
+function minsAfterOpen(parkId, now){ const o = openingFor(parkId, now); return o !== null && now >= o ? Math.round((now - o) / 60000) : null; }
+// 'up' or 'down' when we know the posting before the current one; '' otherwise.
+function trendFor(t, wait){ return t && t.wait === wait && typeof wait === 'number' && typeof t.prevWait === 'number' && t.prevWait !== wait ? (wait > t.prevWait ? 'up' : 'down') : ''; }
+function outlookFor(parkId, status, wait, t, now){
+  if (status !== 'OPERATING' || wait === null) return null;
+  const m = minsAfterOpen(parkId, now);
+  if (m !== null && m * 60000 < MORNING_MS) return {kind:'longer', why:'morning', mins:m};
+  const tr = trendFor(t, wait);
+  if (tr === 'up') return {kind:'good', why:'up', from:t.prevWait};
+  if (tr === 'down') return {kind:'longer', why:'down', from:t.prevWait};
+  return null;
+}
+const OUTLOOK_LABEL = {up:'Good bet', down:'Posted or longer', morning:'Expect longer'};
+function outlookNote(o, wait){
+  if (o.why === 'up') return 'Good bet: the posted wait just went up from ' + o.from + ' to ' + wait + ' min. In your timed waits, joining right after a jump came in shorter than posted 8 times in 9.';
+  if (o.why === 'down') return 'Posted or longer: the posted wait just dropped from ' + o.from + ' to ' + wait + ' min. The posted number often drops before the line really shrinks; in your timed waits only 2 in 6 came in shorter.';
+  return 'Expect longer: the park opened ' + o.mins + ' min ago. Early posted waits trail the crowd; in your timed waits they ran about 1.5 times the posted time.';
+}
+// Park opening times, fetched once a day per park, for the first-hour outlook.
+async function fetchJson(url, ms){
+  const ctl = typeof AbortController === 'function' ? new AbortController() : null;
+  const stop = ctl ? setTimeout(() => ctl.abort(), ms) : 0;
+  try{ const r = await fetch(url, {cache:'no-store', signal:ctl ? ctl.signal : undefined}); if (!r.ok) throw new Error(String(r.status)); return await r.json(); }
+  finally{ clearTimeout(stop); }
+}
+async function fetchOpening(){
+  const now = Date.now(), today = laDay(now);
+  await Promise.all(Object.values(PARKS).map(async p => {
+    const o = opening[p.id];
+    if (o && o.day === today && (typeof o.at === 'number' || now - (o.failedAt || 0) < 30 * 60000)) return;
+    try{
+      const j = await fetchJson('https://api.themeparks.wiki/v1/entity/' + p.id + '/schedule', 8000);
+      // Earliest opening today, counting early entry: rides start posting waits then.
+      const times = (j.schedule || []).filter(x => x.date === today && (x.type === 'OPERATING' || x.type === 'EXTRA_HOURS'))
+        .map(x => Date.parse(x.openingTime)).filter(x => !isNaN(x));
+      opening[p.id] = times.length ? {day:today, at:Math.min(...times)} : {day:today, at:null, failedAt:now};
+    }catch(err){ opening[p.id] = {day:today, at:null, failedAt:now}; }
+  }));
+  store.set('opening', opening);
+}
+
+/* Preshow rides: the posted wait counts only to the first preshow room. Minutes from there to boarding
+   in your timings through Nov 14, used until this phone has its own timing for the ride. */
+const PRESHOW_EXTRA = [['haunted mansion',4,7], ['rise of the resistance',15,24], ['runaway railway',9,9], ['smugglers run',11,11]];
+function preshowSec(e){ const p = (e.laps || []).find(l => l.label !== SIGN_LAP); return p ? Math.round(p.at / 1000) : null; }
+// The part of a timed wait the posted number describes: to the first preshow room if there is one, otherwise to boarding.
+function comparableSec(e){ const p = preshowSec(e); return p !== null ? p : (e.actualSec ?? e.actualMin * 60); }
+function preshowNote(r, pr){
+  if (!pr.laps || !pr.laps.length) return '';
+  const room = pr.laps[0].replace(/^(Entering|Boarding) the /, '');
+  const mine = log.filter(e => e.id === r.id && !e.flagged && preshowSec(e) !== null).map(e => ((e.actualSec ?? e.actualMin * 60) - preshowSec(e)) / 60);
+  let lo = null, hi = null, src = '';
+  if (mine.length){ lo = Math.min(...mine); hi = Math.max(...mine); src = 'your ' + mine.length + ' timing' + (mine.length === 1 ? '' : 's'); }
+  else { const d = PRESHOW_EXTRA.find(x => norm(r.name).includes(x[0])); if (d){ lo = d[1]; hi = d[2]; src = 'your timings through Nov 14'; } }
+  if (lo === null) return 'Posted time counts to the ' + room + '. Add the preshow and loading time on top.';
+  lo = Math.round(lo); hi = Math.round(hi);
+  return 'Posted time counts to the ' + room + '. After that, plan on about ' + (lo === hi ? lo : lo + '–' + hi) + ' more minutes to board (' + src + ').';
+}
+// After 3 or more timings of a ride, how it usually compares with posted.
+function mineNote(r){
+  const g = log.filter(e => e.id === r.id && !e.flagged && e.posted > 0);
+  if (g.length < 3) return '';
+  const pct = Math.round(median(g.map(e => comparableSec(e) / 60 / e.posted)) * 100);
+  return 'Your timings here: typically ' + pct + '% of posted across ' + g.length + ' waits' + (pct < 95 ? ', usually shorter.' : pct > 105 ? ', usually longer.' : ', about right.');
+}
+function evidence(){
+  const c = {up:BASELINE.up.n, down:BASELINE.down.n};
+  for (const e of log) if (!e.flagged && e.posted > 0 && (e.trend === 'up' || e.trend === 'down')) c[e.trend]++;
+  return c;
+}
+
 function loggerUrl(){ return (settings.loggerUrl || '').trim(); }
 function loggerLive(now){ return !!(loggerUrl() && logger && logger.rides && now - logger.checkedAt <= LOGGER_MAX_AGE); }
 function applyLogger(list, now){
@@ -261,6 +346,8 @@ function applyLogger(list, now){
     if (!L || !t) continue;
     const lw = L.status === 'OPERATING' && typeof L.wait === 'number' ? L.wait : null;
     if (L.status !== e.status || lw !== t.wait) continue; // the app has a newer reading; trust its own clock
+    const appNewer = t.exact && t.since > L.since + SAME_CHANGE;
+    if (!appNewer && typeof L.prevWait === 'number') t.prevWait = L.prevWait;
     if (t.exact && t.since > L.since + SAME_CHANGE){ /* the app saw a change between logger checks */ }
     else if (t.exact && t.since >= L.since - SAME_CHANGE){ t.since = Math.min(t.since, L.since); }
     else if (L.exact){ t.since = L.since; t.exact = true; }
@@ -302,18 +389,19 @@ function merge(list, now){
     const wait = e.status === 'OPERATING' ? standby(e) : null;
     const single = e.queue && e.queue.SINGLE_RIDER && typeof e.queue.SINGLE_RIDER.waitTime === 'number' ? e.queue.SINGLE_RIDER.waitTime : null;
     const ll = e.queue && (e.queue.RETURN_TIME || e.queue.PAID_RETURN_TIME);
-    out.push(Object.assign({id:e.id, name:clean(e.name), status:e.status, wait, single, ll, pos:p, land:p ? p.land : ''}, flagsFor(e.status, wait, t, now), {drop:dropFor(e.id, e.status, wait, now)}));
+    out.push(Object.assign({id:e.id, parkId:e.parkId, name:clean(e.name), status:e.status, wait, single, ll, pos:p, land:p ? p.land : ''}, flagsFor(e.status, wait, t, now),
+      {drop:dropFor(e.id, e.status, wait, now), outlook:outlookFor(e.parkId, e.status, wait, track[e.id], now)}));
   }
   return out;
 }
 async function refresh(manual){
   const btn = $('btn-refresh'); btn.classList.add('spin');
   try{
-    const lp = fetchLogger();
+    const lp = fetchLogger(), op = fetchOpening();
     const r = await fetch(API + (manual ? '?t=' + Date.now() : ''), {cache:'no-store'});
     if (!r.ok) throw new Error('The wait time service answered ' + r.status + '.');
     const j = await r.json();
-    await lp;
+    await lp; await op;
     const now = Date.now();
     liveData = (j.liveData || []).filter(e => e.entityType === 'ATTRACTION' || POS[e.id]);
     updateTracking(liveData, now);
@@ -369,6 +457,7 @@ function renderParkSwitch(){
 }
 const REOPEN = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12a7 7 0 1 0 2.05-4.95M5 4v4h4" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const DOWN = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v15M6 13l6 6 6-6" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const UP = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20V5M6 11l6-6 6 6" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const STAR = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l2.9 6 6.6.9-4.8 4.6 1.2 6.5L12 17.4l-5.9 3.1 1.2-6.5L2.5 9.4l6.6-.9z" fill="#1f2f44"/></svg>';
 function pinClass(r){
   if (r.status !== 'OPERATING') return 'closed';
@@ -384,13 +473,14 @@ function pinHtml(r){
   else if (r.reopen) t = REOPEN + (r.wait !== null ? r.wait : '');
   else if (r.wait !== null) t = (r.hunch ? STAR : '') + r.wait;
   if (r.drop && r.status === 'OPERATING' && r.wait !== null) t += '<span class="drop-badge">' + DOWN + '</span>';
+  if (r.outlook && r.outlook.kind === 'good') t += '<span class="good-badge">' + UP + '</span>';
   return '<button type="button" class="pin ' + c + '" aria-label="' + r.name.replace(/"/g,'&quot;') + ': ' + describe(r) + '">' + t + '</button>';
 }
 function describe(r){
   if (r.status !== 'OPERATING') return statusText(r.status);
   if (r.reopen) return 'just reopened ' + fmtAge(r.reopenMin * 60000) + (r.wait !== null ? ', ' + r.wait + ' minute posted wait' : '');
   if (r.wait === null) return 'open, no posted wait';
-  return r.wait + ' minute wait, unchanged for ' + (r.exact ? '' : 'at least ') + fmtMin(r.staleMin) + (r.drop ? ', likely to drop' : '');
+  return r.wait + ' minute wait, unchanged for ' + (r.exact ? '' : 'at least ') + fmtMin(r.staleMin) + (r.drop ? ', likely to drop' : '') + (r.outlook ? ', ' + OUTLOOK_LABEL[r.outlook.why].toLowerCase() : '');
 }
 function statusText(s){ return {CLOSED:'Closed', DOWN:'Temporarily down', REFURBISHMENT:'Closed for refurbishment', OPERATING:'Open'}[s] || s; }
 function renderMap(){
@@ -398,7 +488,8 @@ function renderMap(){
   const seen = new Set();
   for (const r of rides){
     if (!r.pos) continue; seen.add(r.id);
-    const z = r.reopen ? 1100 : r.hunch ? 1000 : r.drop ? 900 : r.status === 'OPERATING' && r.wait !== null ? 500 : 0;
+    const good = r.outlook && r.outlook.kind === 'good';
+    const z = r.reopen ? 1100 : r.hunch ? 1000 : r.drop ? 900 : good ? 800 : r.status === 'OPERATING' && r.wait !== null ? 500 : 0;
     const icon = L.divIcon({className:'pinwrap', html:pinHtml(r), iconSize:[0,0]});
     if (markers[r.id]){ markers[r.id].setIcon(icon); markers[r.id].setZIndexOffset(z); }
     else {
@@ -411,29 +502,30 @@ function renderMap(){
   // Flag chips: just-reopened rides first (they're time-sensitive), then stale postings, then likely drops.
   const hs = rides.filter(r => r.reopen).sort((a,b) => a.reopenMin - b.reopenMin)
     .concat(rides.filter(r => r.hunch).sort((a,b) => b.staleMin - a.staleMin))
-    .concat(rides.filter(r => r.drop && !r.reopen && !r.hunch).sort((a,b) => b.drop.signals - a.drop.signals || b.wait - a.wait));
+    .concat(rides.filter(r => r.drop && !r.reopen && !r.hunch).sort((a,b) => b.drop.signals - a.drop.signals || b.wait - a.wait))
+    .concat(rides.filter(r => r.outlook && r.outlook.kind === 'good' && !r.drop && !r.reopen && !r.hunch).sort((a,b) => b.wait - a.wait));
   const bar = $('hunch-bar'); bar.textContent = ''; bar.hidden = !hs.length || !$('sheet').hidden;
   for (const r of hs.slice(0,6)){
-    const kind = r.reopen ? 'reopen' : r.hunch ? 'hunch' : 'drop';
+    const kind = r.reopen ? 'reopen' : r.hunch ? 'hunch' : r.drop ? 'drop' : 'good';
     const b = document.createElement('button'); b.type = 'button'; b.className = 'hunch-chip' + (kind === 'hunch' ? '' : ' ' + kind);
-    b.innerHTML = (kind === 'reopen' ? REOPEN : kind === 'hunch' ? STAR : DOWN).replace('aria-hidden','width="14" height="14" aria-hidden');
+    b.innerHTML = (kind === 'reopen' ? REOPEN : kind === 'hunch' ? STAR : kind === 'drop' ? DOWN : UP).replace('aria-hidden','width="14" height="14" aria-hidden');
     b.append(r.name + (r.wait !== null ? ' ' + r.wait + ' min' : ''));
-    const s = document.createElement('small'); s.textContent = kind === 'reopen' ? 'reopened ' + fmtAge(r.reopenMin * 60000) : kind === 'hunch' ? 'still for ' + fmtMin(r.staleMin) : 'likely to drop'; b.append(s);
+    const s = document.createElement('small'); s.textContent = kind === 'reopen' ? 'reopened ' + fmtAge(r.reopenMin * 60000) : kind === 'hunch' ? 'still for ' + fmtMin(r.staleMin) : kind === 'drop' ? 'likely to drop' : 'good bet, just went up'; b.append(s);
     b.addEventListener('click', () => openSheet(r.id, true)); bar.append(b);
   }
 }
 
 /* list */
-function rank(r){ if (r.reopen) return -1; if (r.hunch) return 0; if (r.drop) return 0.5; if (r.status === 'OPERATING' && r.wait !== null) return 1; if (r.status === 'OPERATING') return 2; return 3; }
+function rank(r){ if (r.reopen) return -1; if (r.hunch) return 0; if (r.drop) return 0.5; if (r.outlook && r.outlook.kind === 'good') return 0.7; if (r.status === 'OPERATING' && r.wait !== null) return 1; if (r.status === 'OPERATING') return 2; return 3; }
 function renderList(){
   const ol = $('ride-list'); ol.textContent = '';
   const sorted = rides.slice().sort((a,b) => rank(a) - rank(b) || (a.reopen ? a.reopenMin - b.reopenMin : b.staleMin - a.staleMin));
   for (const r of sorted){
     const li = document.createElement('li');
-    const b = document.createElement('button'); b.type = 'button'; b.className = 'ride' + (r.reopen ? ' reopen' : r.hunch ? ' hunch' : r.drop ? ' drop' : '');
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'ride' + (r.reopen ? ' reopen' : r.hunch ? ' hunch' : r.drop ? ' drop' : r.outlook && r.outlook.kind === 'good' ? ' good' : '');
     const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = r.name;
     const ld = document.createElement('span'); ld.className = 'ld';
-    ld.textContent = (r.land ? r.land + ' · ' : '') + (r.status !== 'OPERATING' ? statusText(r.status) : r.reopen ? 'Just reopened ' + fmtAge(r.reopenMin * 60000) : r.wait === null ? 'Open, no posted wait' : (r.hunch ? 'Possible short line · ' : '') + (r.drop ? 'Likely to drop · ' : '') + 'unchanged ' + (r.exact ? '' : '≥ ') + fmtMin(r.staleMin));
+    ld.textContent = (r.land ? r.land + ' · ' : '') + (r.status !== 'OPERATING' ? statusText(r.status) : r.reopen ? 'Just reopened ' + fmtAge(r.reopenMin * 60000) : r.wait === null ? 'Open, no posted wait' : (r.hunch ? 'Possible short line · ' : '') + (r.drop ? 'Likely to drop · ' : '') + (r.outlook ? OUTLOOK_LABEL[r.outlook.why] + ' · ' : '') + 'unchanged ' + (r.exact ? '' : '≥ ') + fmtMin(r.staleMin));
     const w = document.createElement('span'); w.className = 'w';
     w.textContent = r.status === 'OPERATING' && r.wait !== null ? r.wait : '–';
     const sm = document.createElement('small'); sm.textContent = r.status === 'OPERATING' && r.wait !== null ? 'min posted' : ''; w.append(sm);
@@ -467,7 +559,19 @@ function openSheet(id, pan){
     dn.textContent = 'Likely to drop: ' + r.drop.signals + ' of 4 signs (' + why.join(', ') + '). In past logs, the next posted change after a spike like this was a drop about 3 times in 4, usually by 5 to 10 minutes.';
     dn.hidden = false;
   } else dn.hidden = true;
-  const pr = protocolFor(r.name), how = $('s-howto'); how.textContent = '';
+  const pr = protocolFor(r.name);
+  const ol = $('s-outlook');
+  if (r.outlook){
+    let txt = outlookNote(r.outlook, r.wait);
+    if (r.outlook.why !== 'morning' && !pr.untimed){
+      const c = evidence()[r.outlook.why];
+      if (c < EVIDENCE_GOAL) txt += ' Good one to time: you have ' + c + ' of ' + EVIDENCE_GOAL + ' timings like this.';
+    }
+    ol.textContent = txt; ol.className = 'note ' + r.outlook.kind; ol.hidden = false;
+  } else ol.hidden = true;
+  const ps = $('s-preshow'), pn = pr.untimed ? '' : preshowNote(r, pr); ps.textContent = pn; ps.hidden = !pn;
+  const mn = $('s-mine'), mt = mineNote(r); mn.textContent = mt; mn.hidden = !mt;
+  const how = $('s-howto'); how.textContent = '';
   if (pr.untimed){
     how.append(howLine('Not timed', pr.why));
   } else {
@@ -488,7 +592,9 @@ function closeSheet(){ if ($('sheet').hidden) return; $('sheet').hidden = true; 
 /* timer and log */
 function startTimer(){
   const r = rides.find(x => x.id === selectedId); if (!r || timer) return;
-  timer = {id:r.id, name:r.name, posted:r.wait, staleMin:Math.round(r.staleMin), exact:r.exact, reopenMin:r.reopenMin === null ? null : Math.round(r.reopenMin), dropSignals:r.drop ? r.drop.signals : null, start:Date.now(), laps:[], flagged:false};
+  const now = Date.now(), t = track[r.id], tr = trendFor(t, r.wait);
+  timer = {id:r.id, name:r.name, posted:r.wait, staleMin:Math.round(r.staleMin), exact:r.exact, reopenMin:r.reopenMin === null ? null : Math.round(r.reopenMin), dropSignals:r.drop ? r.drop.signals : null,
+    prevPosted:tr ? t.prevWait : null, trend:tr, minsAfterOpen:minsAfterOpen(r.parkId, now), start:now, laps:[], flagged:false};
   store.set('timer', timer); closeSheet(); show('log'); render();
 }
 function stopTimer(keep){
@@ -551,7 +657,7 @@ function renderLog(){
   if (timer){
     $('t-name').textContent = timer.name;
     renderTimer(false);
-    $('t-meta').textContent = timer.posted !== null ? 'Posted ' + timer.posted + ' min, unchanged for ' + (timer.exact ? '' : 'at least ') + fmtMin(timer.staleMin) + ' when you joined.' + (wasReopen(timer) ? ' Reopened ' + timer.reopenMin + ' min before.' : '') : 'No posted wait when you joined.';
+    $('t-meta').textContent = timer.posted !== null ? 'Posted ' + timer.posted + ' min, unchanged for ' + (timer.exact ? '' : 'at least ') + fmtMin(timer.staleMin) + ' when you joined.' + (wasReopen(timer) ? ' Reopened ' + timer.reopenMin + ' min before.' : '') + (timer.trend ? ' It had just gone ' + timer.trend + ' from ' + timer.prevPosted + '.' : '') : 'No posted wait when you joined.';
   }
   const has = log.length > 0;
   $('log-empty').hidden = has; $('log-wrap').hidden = !has; $('log-actions').hidden = !has;
@@ -567,22 +673,26 @@ function renderLog(){
   }
   const v = $('verdict');
   const withPost = log.filter(e => e.posted > 0 && !e.flagged);
+  const morning = e => typeof e.minsAfterOpen === 'number' && e.minsAfterOpen * 60000 < MORNING_MS;
   const ro = withPost.filter(wasReopen), rest = withPost.filter(e => !wasReopen(e));
   const st = rest.filter(e => e.staleMin >= settings.stale), fr = rest.filter(e => e.staleMin < settings.stale);
+  const up = withPost.filter(e => e.trend === 'up' && !morning(e)), dn = withPost.filter(e => e.trend === 'down' && !morning(e)), am = withPost.filter(morning);
   if (withPost.length){
-    const pct = g => { const m = median(g.map(e => e.actualMin / e.posted)); return m === null ? null : Math.round(m * 100); };
-    const ps = pct(st), pf = pct(fr), pr = pct(ro);
+    // Preshow rides are compared up to the first preshow room, where the posted time ends.
+    const pct = g => { const m = median(g.map(e => comparableSec(e) / 60 / e.posted)); return m === null ? null : Math.round(m * 100); };
+    const line = (label, g, extra) => { const p = pct(g); v.append(document.createElement('br'), label + ': ' + (p === null ? 'none timed yet' : 'typically ' + p + '% of posted, across ' + g.length + ' ride' + (g.length === 1 ? '' : 's')) + (extra || '') + '.'); };
     v.hidden = false; v.textContent = '';
-    const h = document.createElement('strong'); h.textContent = 'Your evidence so far'; v.append(h, document.createElement('br'));
-    v.append('Stale postings (unchanged ' + settings.stale + '+ min): ' + (ps === null ? 'none timed yet' : 'your actual wait was typically ' + ps + '% of posted, across ' + st.length + ' ride' + (st.length === 1 ? '' : 's')) + '.');
-    v.append(document.createElement('br'));
-    v.append('Fresher postings: ' + (pf === null ? 'none timed yet' : 'typically ' + pf + '% of posted, across ' + fr.length + ' ride' + (fr.length === 1 ? '' : 's')) + '.');
-    v.append(document.createElement('br'));
-    v.append('Just reopened (within ' + settings.reopen + ' min): ' + (pr === null ? 'none timed yet' : 'typically ' + pr + '% of posted, across ' + ro.length + ' ride' + (ro.length === 1 ? '' : 's')) + '.');
-    if (st.length + fr.length < 10){ v.append(document.createElement('br')); const s = document.createElement('span'); s.className = 'muted'; s.textContent = 'A handful of rides can mislead; aim for 10 or more in each group.'; v.append(s); }
+    const h = document.createElement('strong'); h.textContent = 'Your evidence so far'; v.append(h);
+    line('Posted had just gone up', up); line('Posted had just gone down', dn); line('First hour after opening', am);
+    line('Stale postings (unchanged ' + settings.stale + '+ min)', st); line('Fresher postings', fr); line('Just reopened (within ' + settings.reopen + ' min)', ro);
+    const c = evidence(), note = document.createElement('span'); note.className = 'muted';
+    note.textContent = 'Before the app saved whether the posted wait had just moved (through Nov 14): went up ' + BASELINE.up.pct + '% (' + BASELINE.up.n + '), went down ' + BASELINE.down.pct + '% (' + BASELINE.down.n + '), first hour ' + BASELINE.morning.pct + '% (' + BASELINE.morning.n + '). ' +
+      'Toward ' + EVIDENCE_GOAL + ' each: went up ' + Math.min(c.up, EVIDENCE_GOAL) + '/' + EVIDENCE_GOAL + ', went down ' + Math.min(c.down, EVIDENCE_GOAL) + '/' + EVIDENCE_GOAL + '. Preshow rides count to the first preshow room.';
+    v.append(document.createElement('br'), note);
   } else v.hidden = true;
 }
-const COLS = ['date','ride','posted_min','unchanged_min','unchanged_exact','actual_min','actual_sec','sign_lap_sec','sign_to_board_sec','preshow_laps','ride_went_down','reopened_min'];
+const COLS = ['date','ride','posted_min','unchanged_min','unchanged_exact','actual_min','actual_sec','sign_lap_sec','sign_to_board_sec','preshow_laps','ride_went_down','reopened_min',
+  'ride_id','prev_posted_min','posted_trend','drop_signals','mins_after_opening'];
 function rowFor(e){
   const sign = (e.laps || []).find(l => l.label === SIGN_LAP);
   const sec = e.actualSec ?? e.actualMin * 60;
@@ -590,7 +700,10 @@ function rowFor(e){
   return {id:String(e.start), date:new Date(e.start).toISOString(), ride:e.name, posted_min:e.posted ?? '', unchanged_min:e.staleMin,
     unchanged_exact:e.exact ? 'yes' : 'no', actual_min:e.actualMin, actual_sec:sec, sign_lap_sec:sign ? Math.round(sign.at / 1000) : '',
     sign_to_board_sec:sign ? sec - Math.round(sign.at / 1000) : '', preshow_laps:pre, ride_went_down:e.flagged ? 'yes' : 'no',
-    reopened_min:typeof e.reopenMin === 'number' ? e.reopenMin : ''};
+    reopened_min:typeof e.reopenMin === 'number' ? e.reopenMin : '',
+    // The ride's ThemeParks.wiki id matches the Posted Waits log exactly, even where the app shows a tidier name.
+    ride_id:e.id || '', prev_posted_min:typeof e.prevPosted === 'number' ? e.prevPosted : '', posted_trend:e.trend || '',
+    drop_signals:typeof e.dropSignals === 'number' ? e.dropSignals : '', mins_after_opening:typeof e.minsAfterOpen === 'number' ? e.minsAfterOpen : ''};
 }
 
 /* Google Sheet sync: each finished wait is sent once; the sheet skips ids it already has, so retries are safe. */
@@ -652,7 +765,7 @@ function exportCsv(){
 /* shell */
 function render(){
   const now = Date.now();
-  if (rides.length) rides = rides.map(r => { const t = track[r.id]; return t ? Object.assign({}, r, flagsFor(r.status, r.wait, t, now), {drop:dropFor(r.id, r.status, r.wait, now)}) : r; });
+  if (rides.length) rides = rides.map(r => { const t = track[r.id]; return t ? Object.assign({}, r, flagsFor(r.status, r.wait, t, now), {drop:dropFor(r.id, r.status, r.wait, now), outlook:outlookFor(r.parkId, r.status, r.wait, t, now)}) : r; });
   const nFlag = rides.filter(r => r.hunch || r.reopen).length, nDrop = rides.filter(r => r.drop).length;
   $('status-line').textContent = lastError ? lastError : lastFetch ? 'Waits updated ' + fmtAge(now - lastFetch) + ' · ' + nFlag + ' possible short line' + (nFlag === 1 ? '' : 's') + (nDrop ? ' · ' + nDrop + ' likely to drop' : '') : 'Loading wait times…';
   renderMap(); renderList(); renderLog(); renderLogger();

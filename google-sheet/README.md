@@ -21,6 +21,7 @@ Waits you've already timed on the phone are sent right away. After that, each wa
 - Clearing the log in the app does not delete rows from the sheet.
 - Columns: `id` (the wait's start time, used to skip duplicates), date, ride, posted wait, how long the posted wait was unchanged, actual wait in minutes and seconds, the sign lap, sign-to-boarding time, preshow laps, the ride-went-down flag, and when the row arrived.
 - `reopened_min` (added later, so it comes after `synced_at`): if you joined the line soon after the ride came back from being down, how many minutes after. Blank otherwise. After updating `Code.gs`, the header is added to your existing sheet automatically.
+- Added Nov 2026, after `reopened_min`: `ride_id` (the ThemeParks.wiki id, the same one the Posted Waits tab uses, so rides match even where the app shows a tidier name, as with Star Tours), `prev_posted_min` (the posted wait before the one you joined on), `posted_trend` (`up` or `down`), `drop_signals` (likely-to-drop signs showing when you joined) and `mins_after_opening`. The first 20 rows were filled in from the Posted Waits tab. Update `Code.gs` and deploy a new version (Deploy → Manage deployments → Edit → New version) so new waits include them.
 
 # Posted wait logger setup
 

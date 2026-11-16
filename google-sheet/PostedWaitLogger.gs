@@ -17,6 +17,11 @@
  * analysis can leave them out, and doGet tells the app which rides are in an
  * event window right now.
  *
+ * Just went up / down: each ride also remembers the posted wait before its
+ * current one, and doGet sends it as prevWait. In timed waits through Nov 14,
+ * waits joined right after the posted number went up came in shorter than
+ * posted 8 times in 9; right after it went down, only 2 times in 6.
+ *
  * Likely to drop: the logger also keeps a running tally of each ride's posted
  * waits today, and at each change counts four signs that the next posted
  * change will be a drop (see DROP). doGet sends the count to the app, which
@@ -27,6 +32,10 @@
  * permissions prompt. Then Deploy → New deployment → Web app (Execute as: Me,
  * Who has access: Anyone) and paste the /exec URL into the app under
  * My waits → Posted wait logger. Writes to the sheet named by CONFIG.SHEET_ID.
+ *
+ * Upgrading to "just went up / down" (prevWait): paste this file over the old
+ * one and Deploy → Manage deployments → edit → New version. The next check
+ * fills in each ride's previous posted wait from the Posted Waits tab by itself.
  *
  * Upgrading an existing install to event-night tagging: paste this file over
  * the old one, run backfillEventFlags() once to mark rows already logged, then
@@ -107,15 +116,17 @@ const HEARTBEAT_HEADERS = ['Hour Starting', 'Successful Checks', 'Failed Checks'
 /*
  * Per-ride state, kept in script properties (one property per park, to stay
  * under the 9 KB-per-property limit). Each ride is a compact array:
- *   [status, wait, since, exact, statusSince, prevStatus]
+ *   [status, wait, since, exact, statusSince, prevStatus, prevWait]
  * status/wait   what the feed said at the last check (wait '' when none posted)
  * since         epoch seconds when status or wait last changed
  * exact         1 if 'since' is a change this logger saw within one check,
  *               0 if it is only a lower bound (first sighting, or after a gap)
  * statusSince   epoch seconds when the status last changed
  * prevStatus    the status before that change ('' if unknown)
+ * prevWait      the posted wait before the current one ('' if unknown or none
+ *               was posted), so the app can tell whether it just went up or down
  */
-const S = {status: 0, wait: 1, since: 2, exact: 3, statusSince: 4, prevStatus: 5};
+const S = {status: 0, wait: 1, since: 2, exact: 3, statusSince: 4, prevStatus: 5, prevWait: 6};
 
 /** Run once: creates the tabs and installs the 5-minute timer. */
 function setup() {
@@ -153,6 +164,7 @@ function logPostedWaits() {
 
     const props = PropertiesService.getScriptProperties();
     const lastState = loadState_();
+    if (props.getProperty('prevWaitFilled') !== '1') fillPrevWaits_(lastState);
     const lastCheck = Number(props.getProperty('lastCheck') || 0);
     const gap = !lastCheck || nowSec - lastCheck > CONFIG.GAP_MINUTES * 60;
     const newState = {};
@@ -177,12 +189,13 @@ function logPostedWaits() {
       let st;
       if (!prev) {
         // First sighting: unchanged since at least now (or the feed's own time, if earlier).
-        st = [status, wait, feedSec && feedSec < nowSec ? feedSec : nowSec, 0, nowSec, ''];
+        st = [status, wait, feedSec && feedSec < nowSec ? feedSec : nowSec, 0, nowSec, '', ''];
       } else if (prev[S.status] !== status || prev[S.wait] !== wait) {
         const statusChanged = prev[S.status] !== status;
         st = [status, wait, nowSec, gap ? 0 : 1,
           statusChanged ? nowSec : prev[S.statusSince],
-          statusChanged ? (gap ? '' : prev[S.status]) : prev[S.prevStatus]];
+          statusChanged ? (gap ? '' : prev[S.status]) : prev[S.prevStatus],
+          prev[S.wait] !== wait ? (gap ? '' : prev[S.wait]) : (prev[S.prevWait] ?? '')];
       } else {
         st = prev.slice();
         // Unchanged, but if we were away the ride may have changed and changed back.
@@ -223,6 +236,7 @@ function logPostedWaits() {
     }
     saveState_(newState, live);
     saveDay_(day, today);
+    props.setProperty('prevWaitFilled', '1');
     props.setProperty('lastCheck', String(nowSec));
     recordHeartbeat_(now, true, '');
   } catch (err) {
@@ -262,6 +276,7 @@ function doGet() {
       exact: s[S.exact] === 1,
       statusSince: s[S.statusSince] * 1000,
       prevStatus: s[S.prevStatus] || '',
+      prevWait: typeof s[S.prevWait] === 'number' ? s[S.prevWait] : null,
       park: park,
       eventNight: !!eventNow[park],
       drop: eventNow[park] ? null : dropFor_(dayAll[id], today, s),
@@ -276,6 +291,29 @@ function doGet() {
     rides: rides,
   };
   return ContentService.createTextOutput(JSON.stringify(out)).setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * One-time upgrade: rides tracked before prevWait existed get it from the
+ * Posted Waits tab, so "just went up / down" works straight away instead of
+ * waiting for each ride's next change. Uses each ride's latest logged row, and
+ * only when that row still describes the ride's current posted wait.
+ */
+function fillPrevWaits_(state) {
+  const sheet = ss_().getSheetByName(CONFIG.LOG_SHEET);
+  const last = sheet ? sheet.getLastRow() : 0;
+  if (last < 2) return;
+  const n = Math.min(last - 1, 4000);
+  const rows = sheet.getRange(last - n + 1, 1, n, 8).getValues();
+  const lastRow = {};
+  rows.forEach(r => { lastRow[String(r[2])] = r; });
+  Object.keys(state).forEach(id => {
+    const st = state[id];
+    if (st.length > S.prevWait) return;
+    const r = lastRow[id];
+    const ok = r && r[5] !== '' && Number(r[5]) === st[S.wait] && r[6] === 'OPERATING' && r[7] !== '';
+    st[S.prevWait] = ok ? Number(r[7]) : '';
+  });
 }
 
 /* ---------- event nights ---------- */
